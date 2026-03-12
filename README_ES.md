@@ -28,14 +28,18 @@ wget -nc ftp://(ftp.sra.ebi.ac.uk/vol1....
 ```
 Este programa descarga todos los archivos solicitados en la carpeta en la que se encuentre. Puede nombrarse de la forma que resulte más cómoda para el usuario y se ejecuta escribiendo en la terminal `sbatch nombre_del_archivo.sh`, estando situado en la carpeta de destino de las descargas y con el archivo `.sh` copiado dentro de dicha carpeta. Un ejemplo del programa esta cargado dentro del repositorio con el nombre de `download_slurm.sh`
 
-## Procesamiento de los datos
+## Pre-procesamiento de los datos
 
 Una vez descargados los archivos FASTQ, se realizó un procesamiento inicial de las lecturas con el objetivo de mejorar la calidad de los datos y homogeneizar todas las muestras antes de los análisis posteriores.
 
 Como primera aproximación, se puede utilizar **FastQC** para llevar a cabo una evaluación preliminar de la calidad de las lecturas, lo que permite detectar la presencia de adaptadores, bases de baja calidad o posibles sesgos en la secuenciación. Al ejecutar FastQC en todas tus descargas se van a tener muchos archivos `muestra_fastqc.html`, uno por cada muestra. 
 
-Posteriormente, se aplicó un proceso de *trimming* y filtrado utilizando **fastp**. Esta herramienta permite eliminar adaptadores, recortar regiones de baja calidad y descartar lecturas demasiado cortas o de baja fiabilidad. De este modo, se obtiene un conjunto de secuencias limpias y más adecuadas para las siguientes etapas del análisis transcriptómico.
+Posteriormente, se aplicó un proceso de *trimming* y filtrado utilizando **fastp**. Esta herramienta permite eliminar adaptadores, recortar regiones de baja calidad y descartar lecturas demasiado cortas o de baja fiabilidad. De este modo, se obtiene un conjunto de secuencias limpias y más adecuadas para las siguientes etapas del análisis transcriptómico. El script `fastp.sh` permite ejecutar en SLURM todos los archivos `fastq.gz` y generar una nueva tanda de archivos limpios en nuevo directorio llamado reads_limpios.
 
 El uso de **fastp** presenta además la ventaja de integrar, en una sola ejecución, tanto el control de calidad como el filtrado y recorte de lecturas. Al tratarse de una herramienta implementada en C++ y compatible con ejecución multihilo, permite procesar grandes volúmenes de datos de forma rápida y eficiente.
 
-Este paso resulta fundamental para reducir el ruido técnico y asegurar que los análisis posteriores se realicen sobre datos consistentes y comparables entre muestras.
+Este paso resulta fundamental para reducir el ruido técnico y asegurar que los análisis posteriores se realicen sobre datos consistentes y comparables entre muestras. Si se dispone de poca memoria, se puede añadir una linea de codigo al script `fastp.sh`que elimine los archivos originales con el comando `rm -rf .fastp.gz*` , pero se puede eliminar mas documentos de forma innecesaria si no se tiene cuidado por lo que no se agrego esta funcion en el script adjunto.
+
+
+
+
