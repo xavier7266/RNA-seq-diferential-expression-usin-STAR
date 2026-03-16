@@ -38,8 +38,26 @@ Posteriormente, se aplicó un proceso de *trimming* y filtrado utilizando **fast
 
 El uso de **fastp** presenta además la ventaja de integrar, en una sola ejecución, tanto el control de calidad como el filtrado y recorte de lecturas. Al tratarse de una herramienta implementada en C++ y compatible con ejecución multihilo, permite procesar grandes volúmenes de datos de forma rápida y eficiente.
 
-Este paso resulta fundamental para reducir el ruido técnico y asegurar que los análisis posteriores se realicen sobre datos consistentes y comparables entre muestras. Si se dispone de poca memoria, se puede añadir una linea de codigo al script `fastp.sh`que elimine los archivos originales con el comando `rm -rf .fastp.gz*` , pero se puede eliminar mas documentos de forma innecesaria si no se tiene cuidado por lo que no se agrego esta funcion en el script adjunto.
+Este paso resulta fundamental para reducir el ruido técnico y asegurar que los análisis posteriores se realicen sobre datos consistentes y comparables entre muestras. Si se dispone de poca memoria, se puede añadir una linea de codigo al script `fastp.sh`que elimine los archivos originales con el comando `rm -rf *.fastp.gz` , pero se puede eliminar mas documentos de forma innecesaria si no se tiene cuidado por lo que no se agrego esta funcion en el script adjunto.
+
+
+# Procesado de secuencias.
+Una vez que los datos han sido limpiados y están listos para su análisis, se inicia la etapa de procesamiento. Para ello existen numerosas herramientas y programas bioinformáticos que permiten trabajar con los datos de secuenciación. La elección del software adecuado depende de varios factores, entre ellos el tipo de muestra analizada, la tecnología de secuenciación utilizada, las características de los datos generados y el objetivo final del análisis. Por este motivo, diferentes proyectos o datasets pueden requerir pipelines y herramientas distintas.
+
+## Alineamiento de lecturas con STAR
+
+En este caso se plantea el desarrollo de la *pipeline* utilizando el software **STAR**.  
+**STAR (Spliced Transcripts Alignment to a Reference)** es un software bioinformático diseñado para alinear las lecturas obtenidas en una secuenciación contra un genoma de referencia.Este programa utiliza un índice del genoma y un algoritmo denominado MMP (Maximum Mappable Prefix), lo que le permite realizar el alineamiento de grandes volúmenes de datos en tiempos relativamente cortos.
+
+Además, es capaz de identificar las uniones de empalme entre exones (splice junctions) que aparecen en los transcritos. Esta información es clave, ya que permite reconstruir cómo se organizan los transcritos maduros después del proceso de *splicing*.
+
+Para
 
 
 
+
+
+
+
+Como paso previo al conteo de las secuencias, es necesario conocer si estas poseen o no informacion sobre la hebra de origen del RNA, y en base a esta informacion se las describe como unstranded, stranded o reversely stranded. Esto se puede verificar en las librerias al momento de realizar la secuenciacion. Si no se conoce, antes de usar featurecounts se puede ejecutar un conteo repetido en 1 misma muestra en triplicado cambiando la variable -s en el script y viendo los porcentajes de conteos que logra subread. Esto nos permite suponer que tipo de origen tiene el RNA, un script para testear esto es `test_stranded.sh`, se ejecuta en `bash` dentro de la consola y solo se tiene que seleccionar la ubicacion de la misma muestra.
 
