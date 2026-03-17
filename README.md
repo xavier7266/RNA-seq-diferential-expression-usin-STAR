@@ -1,12 +1,23 @@
-# Inicio de Analisis transcriptomicos.
+# 🧬 Inicio del análisis transcriptómico
 
-Para obtener los datos transcriptómicos iniciales, se procedió a buscarlos en la base de datos de SalmoBase, concretamente en el conjunto de datos AQUA-FAANG, donde se encuentra compartida la información del proyecto AQUA-FAANG.
+Para la obtención de los datos transcriptómicos iniciales, se accedió a la base de datos **SalmoBase**, concretamente al conjunto de datos **AQUA-FAANG**, donde se encuentra disponible la información asociada a este proyecto.
 
-Se revisaron los datos del Bodymap de trucha arcoiris (*Oncorhynchus mykiss*) y de salmon atlantico (*Salmo salar*). Los bodymaps describían un conjunto de órganos de los cuales se realizó el transcriptoma: cerebro, zona distal del intestino, agallas, gónadas, riñón, hígado y tejido muscular.
+Se revisaron los *bodymaps* de:
+- Trucha arcoíris (*Oncorhynchus mykiss*)
+- Salmón atlántico (*Salmo salar*)
 
-La información se organizó en una hoja de cálculo, agrupándola según el interés de la investigación. A partir de estas listas, se descargó desde la propia página el archivo `.sh` con los archivos FASTQ correspondientes a cada órgano.
+Estos *bodymaps* describen un conjunto de órganos a partir de los cuales se obtuvo el transcriptoma:
+- Cerebro  
+- Intestino distal  
+- Agallas  
+- Gónadas  
+- Riñón  
+- Hígado  
+- Tejido muscular  
 
-## Descargar archivos de transcriptomica en CESGA usando SLURM.
+La información se organizó en una hoja de cálculo, agrupando los datos según los objetivos de la investigación. A partir de esta selección, se descargaron desde la propia plataforma los scripts `.sh` que contienen las rutas a los archivos **FASTQ** correspondientes a cada órgano.
+
+## ⬇️ Descarga de archivos de transcriptómica en CESGA usando SLURM
 
 ```bash
 #!/bin/bash
@@ -26,19 +37,17 @@ wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR104/030/ERR104.....
 ....
 wget -nc ftp://(ftp.sra.ebi.ac.uk/vol1....
 ```
-Este programa descarga todos los archivos solicitados en la carpeta en la que se encuentre. Puede nombrarse de la forma que resulte más cómoda para el usuario y se ejecuta escribiendo en la terminal `sbatch nombre_del_archivo.sh`, estando situado en la carpeta de destino de las descargas y con el archivo `.sh` copiado dentro de dicha carpeta. Un ejemplo del programa esta cargado dentro del repositorio con el nombre de `download_slurm.sh`
+Este script descarga todos los archivos solicitados en el directorio en el que se ejecuta. Puede nombrarse de la forma que resulte más conveniente y se lanza desde terminal mediante el comando `sbatch`, aunque tambien se puede usar bash, siempre que el archivo `.sh` se encuentre copiado dentro de la carpeta destino de las descargas. En el repositorio se incluye un ejemplo del script con el nombre de `download_slurm.sh`.
 
-## Pre-procesamiento de los datos
+## Preprocesamiento de los datos
 
-Una vez descargados los archivos FASTQ, se realizó un procesamiento inicial de las lecturas con el objetivo de mejorar la calidad de los datos y homogeneizar todas las muestras antes de los análisis posteriores.
+Una vez descargados los archivos **FASTQ**, se llevó a cabo un procesamiento inicial de las lecturas con el objetivo de mejorar la calidad de los datos y homogeneizar todas las muestras antes de los análisis posteriores.
 
-Como primera aproximación, se puede utilizar **FastQC** para llevar a cabo una evaluación preliminar de la calidad de las lecturas, lo que permite detectar la presencia de adaptadores, bases de baja calidad o posibles sesgos en la secuenciación. Al ejecutar FastQC en todas tus descargas se van a tener muchos archivos `muestra_fastqc.html`, uno por cada muestra. 
+Como primera aproximación, puede utilizarse **FastQC** para realizar una evaluación preliminar de la calidad de las lecturas. Esta herramienta permite detectar la presencia de adaptadores, bases de baja calidad y posibles sesgos en la secuenciación. Al ejecutar FastQC sobre todas las muestras descargadas, se generan múltiples archivos de salida en formato `.html`, uno por cada muestra analizada, normalmente con nombres del tipo `muestra_fastqc.html`.
 
-Posteriormente, se aplicó un proceso de *trimming* y filtrado utilizando **fastp**. Esta herramienta permite eliminar adaptadores, recortar regiones de baja calidad y descartar lecturas demasiado cortas o de baja fiabilidad. De este modo, se obtiene un conjunto de secuencias limpias y más adecuadas para las siguientes etapas del análisis transcriptómico. El script `fastp.sh` permite ejecutar en SLURM todos los archivos `fastq.gz` y generar una nueva tanda de archivos limpios en nuevo directorio llamado reads_limpios.
+Posteriormente, se aplica un proceso de *trimming* y filtrado mediante **fastp**. Esta herramienta permite eliminar adaptadores, recortar regiones de baja calidad y descartar lecturas demasiado cortas o de baja fiabilidad. De este modo, se obtiene un conjunto de secuencias limpias y más adecuado para las etapas posteriores del análisis transcriptómico. El script `fastp.sh` permite ejecutar este proceso en **SLURM** sobre todos los archivos `fastq.gz`, generando una nueva colección de archivos limpios en un directorio denominado `reads_limpios`.
 
-El uso de **fastp** presenta además la ventaja de integrar, en una sola ejecución, tanto el control de calidad como el filtrado y recorte de lecturas. Al tratarse de una herramienta implementada en C++ y compatible con ejecución multihilo, permite procesar grandes volúmenes de datos de forma rápida y eficiente.
-
-Este paso resulta fundamental para reducir el ruido técnico y asegurar que los análisis posteriores se realicen sobre datos consistentes y comparables entre muestras. Si se dispone de poca memoria, se puede añadir una linea de codigo al script `fastp.sh`que elimine los archivos originales con el comando `rm -rf *.fastp.gz` , pero se puede eliminar mas documentos de forma innecesaria si no se tiene cuidado por lo que no se agrego esta funcion en el script adjunto.
+El uso de **fastp** presenta además la ventaja de integrar, en una sola ejecución, tanto el control de calidad como el filtrado y recorte de lecturas. Al tratarse de una herramienta implementada en **C++** y compatible con ejecución multihilo, permite procesar grandes volúmenes de datos de forma rápida y eficiente.
 
 
 # Procesado de secuencias.
