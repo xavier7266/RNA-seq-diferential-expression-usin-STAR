@@ -139,7 +139,7 @@ for R1 in "$CLEAN_DIR"/*_1_clean.fastq.gz; do
       --readFilesCommand zcat \
       --outFileNamePrefix "$OUTDIR/" \
       --outSAMtype BAM SortedByCoordinate \
-      --quantMode GeneCounts
+      --quantMode TrnascriptomeSAM GeneCounts
    
 done
 ```
@@ -163,28 +163,88 @@ La siguiente parte del script corresponde a la ejecución de **STAR** utilizando
 
 - **quantMode GeneCounts**: Hace que STAR genere, además del alineamiento, un archivo con el número de lecturas asignadas a cada gen.
 
+- **quantMode TranscriptomeSAM**: Este parámetro indica a **STAR** que genere el archivo `Aligned.toTranscriptome.out.bam`, el cual contiene las lecturas alineadas a nivel de transcriptoma y puede utilizarse como entrada en herramientas como **RSEM**.
+
+*Es fundamental tener en cuenta las herramientas que se utilizarán en el downstream analysis. Si se desea emplear **RSEM** para la cuantificación y no se ha activado la opción `TranscriptomeSAM` durante el alineamiento con STAR, no será posible ejecutar RSEM correctamente. En ese caso, será necesario volver a ejecutar STAR con este parámetro habilitado.*
+
+### Conteo de genes usando las funciones de STAR.
+
 El comando `quantMode` crea un archivo conteos que puede servir para hacer el analisis diferencial, pero crea cada archivo para cada muestra en su respectivo sub-directorio, por lo que si se quiere trabajar con los datos se puede unir esa informacion en 1 solo archivo con el script `merge_star_tab.sh`.
 
 Este script reúne los archivos `ReadsPerGene.out.tab` generados por **STAR** para cada muestra y los combina en una única matriz de conteos por gen. Para ello, recorre automáticamente las subcarpetas de `star_results`, extrae la columna de conteos de cada muestra y las une en una sola tabla.
 
 Además, el script utiliza el archivo de anotaciones **GTF** para añadir el **gene_name** correspondiente a cada `gene_id`. Como resultado, se genera el archivo final `star_counts_matrix_annotated.tsv`, que contiene la matriz de expresión génica para todas las muestras junto con su anotación básica.
 
-## Conteo usando FeatureCounts 
+## Conteo usando RSEM para cuantificacion.
 
-La principal ventaja de **featureCounts** es que ofrece mayor flexibilidad y control sobre el proceso de asignación de lecturas, permitiendo especificar parámetros como el tipo de librería, el manejo de lecturas emparejadas o los criterios de asignación a genes. Por este motivo, es una herramienta ampliamente utilizada en pipelines de RNA-seq para generar matrices de expresión génica que posteriormente se utilizan en análisis de expresión diferencial.
+El programa RSEM por sus siglas en ingles (RNA-seq by Expectation-Maximication) es una plataforma de osftware de cuantificacion de expresion de muestras de RNA-seq. El software toma las lecturas mapeadas de un trasncriptoma y las estima frente a una referencia de trasncriptos. Dentro del software este estima las abundancias de genes y de sus respectivas isoformas dando como resultado una mayor cantidad de datos para trabajar. Este software es mucho mas lento y pesado porque, como se explica, realiza una estimacion de la abundacia de genes y no solo cuenta los genes como lo hace Samtools. Su rasgo clave es que para estimar la abundancia utuliza un algoritmo de `Maximum-Expectation` para repartir de forma probabilistica las lecturas que pueden corresponder a mas de un trascrito.
 
-Como paso previo al conteo de lecturas, es necesario determinar si las secuencias conservan información sobre la hebra de origen del RNA. En función de esto, las librerías de RNA-seq pueden clasificarse como **unstranded**, **stranded** o **reverse stranded**. Esta información normalmente puede verificarse en los metadatos del experimento o en la documentación del protocolo de preparación de librerías utilizado durante la secuenciación. Sin embargo, si esta información no está disponible, es posible inferirla empíricamente.
+Para ejecutar RSEM, este debe separarse en 2 partes. Primero hace falta desarrollar una referencia adaptada a RSEM, para esto se prepara un script que utiliza los archivos previamente usados en STAR, el genoma de referencia y sus anotaciones (`.GTF y .FASTA`). El script usa la funcion de RSEM `rsem-prepare-reference` cargando los archivos y su formato en el comando de la funcion. Este generara una gran cantidad de archivos por lo que se recomienda crear un directorio donde guardar todos los archivos.
 
-Para ello, antes de realizar el conteo definitivo con featureCounts, se puede ejecutar un conteo de prueba utilizando una misma muestra y repitiendo el análisis tres veces, cambiando el parámetro `-s` (0, 1 y 2). Posteriormente se comparan los porcentajes de lecturas asignadas que devuelve **Subread**, y el valor que produce el mayor porcentaje de asignación suele corresponder al tipo de librería. Para facilitar esta comprobación se incluye el script `test_stranded.sh`, que puede ejecutarse con `bash` desde la consola. El usuario solo necesita indicar la ruta a una muestra `.bam`, y el script ejecutará los tres conteos necesarios para evaluar la orientación de las lecturas.
 
-```bash
-SAMPLE=" "
+## Cuantificación de expresión con RSEM
 
-featureCounts -a ref/Salmo_salar.Ssal_v3.1.115.gtf -o test_s0.txt -T 4 -t exon -g gene_id -p -B -C -s 0 "$SAMPLE"
+El programa RSEM (RNA-Seq by Expectation-Maximization) es una herramienta de software diseñada para la cuantificación de la expresión génica en datos de RNA-seq. A diferencia de métodos basados únicamente en conteo, RSEM utiliza las lecturas previamente alineadas frente a un transcriptoma o genoma de referencia para **estimar la abundancia de genes y sus isoformas**.
+
+Dentro del proceso, RSEM asigna probabilísticamente las lecturas a los distintos transcritos, lo que permite obtener estimaciones más precisas, especialmente en casos donde una misma lectura puede mapear en múltiples isoformas. Para ello, utiliza un algoritmo de tipo **Expectation-Maximization (EM)**, que reparte las lecturas ambiguas en función de la probabilidad de pertenecer a cada transcrito.
+
+Debido a este enfoque basado en estimación, RSEM es una herramienta **más exigente en términos de tiempo de ejecución y recursos computacionales** en comparación con métodos de conteo directo, como los basados en **featureCounts** o **STAR GeneCounts**, que asignan lecturas de forma más directa.
+
+
+### Preparación de la referencia para RSEM
+
+La ejecución de RSEM requiere una preparación previa de una referencia específica. Para ello, se utiliza la función `rsem-prepare-reference`, que genera todos los archivos necesarios a partir del genoma de referencia (`.FASTA`) y sus anotaciones (`.GTF`).
+
+En este pipeline, se emplean los mismos archivos utilizados previamente en STAR. El proceso se automatiza mediante un script que ejecuta `rsem-prepare-reference`, indicando las rutas a los archivos de entrada y el formato correspondiente.
+
+Este paso genera un número considerable de archivos auxiliares, por lo que se recomienda crear un directorio específico para almacenar la referencia de RSEM y mantener organizada la estructura del proyecto.
 
 ```
+ rsem-prepare-reference 
+      --gtf "$GTF" \
+      "$FASTA" \
+      "$RSEM_REF"
+```
+### Ejecución de RSEM
 
-Una vez con la informacion lista se puede ejecutar el script conteos_featurecounts.
+Una vez preparada la referencia, el siguiente paso es la cuantificación de la expresión utilizando **RSEM** mediante la función `rsem-calculate-expression`. Este proceso toma como entrada las lecturas alineadas o directamente los archivos FASTQ, y estima la abundancia de genes y transcritos.
 
+En esta pipeline, RSEM se ejecuta a partir de las lecturas alineadas previamente con STAR, utilizando el archivo `Aligned.toTranscriptome.out.bam`, que contiene los alineamientos proyectados sobre el transcriptoma.
+
+Mediante un algoritmo de tipo **Expectation-Maximization (EM)**, RSEM distribuye probabilísticamente las lecturas ambiguas entre los distintos transcritos. Este proceso se realiza de forma iterativa hasta alcanzar una estimación estable.
+
+A partir de esta asignación, RSEM calcula distintas medidas de abundancia:
+- **expected_counts** → número estimado de lecturas asignadas  
+- **TPM (Transcripts Per Million)** → normalización entre muestras  
+- **FPKM** → normalización basada en longitud y profundidad
+
+Para cada muestra, RSEM genera varios archivos, entre los que destacan:
+
+- `sample.genes.results` → abundancia a nivel de gen  
+- `sample.isoforms.results` → abundancia a nivel de transcrito  
+
+El uso de RSEM permite obtener una estimación más precisa de la expresión génica, especialmente en presencia de isoformas. Sin embargo, este enfoque implica un mayor coste computacional en comparación con métodos de conteo directo como **featureCounts**.
+
+### Unión de resultados en una misma matriz
+
+Para facilitar el análisis posterior en **R**, es necesario combinar los resultados de todas las muestras en una única matriz de expresión. Para esto se desarrollo el script `merge_RSEM.sh`, cuya función es procesar automáticamente los archivos `.genes.results` generados por RSEM y construir la matriz `rsem_gene_expected_count_matrix.tsv`.
+
+El script recorre el directorio de resultados de RSEM y localiza todos los archivos `.genes.results`, que contienen la información de abundancia a nivel de gen para cada muestra. A partir del nombre de cada archivo, se identifica el nombre de la muestra, que posteriormente se utilizará como nombre de columna en la matriz final.
+
+Para cada archivo, el script extrae dos columnas clave:
+- **gene_id** → identificador del gen  
+- **expected_count** → número estimado de lecturas asignadas a ese gen  
+
+Durante este proceso, el script guarda la lista de genes a partir de una de las muestras como referencia común, asegurando que todas las muestras se alineen correctamente por `gene_id`.
+
+Posteriormente, se extrae la columna de **expected counts** de cada muestra y se almacena de forma temporal. Una vez procesadas todas las muestras, el script combina estas columnas utilizando herramientas como `paste`, generando una tabla en la que:
+
+- Cada **fila** representa un gen  
+- Cada **columna** corresponde a una muestra  
+- Los valores corresponden a los **expected counts** estimados por RSEM  
+
+Finalmente, el script añade una cabecera con los nombres de las muestras y genera el archivo `rsem_gene_expected_count_matrix.tsv`, que constituye la matriz de expresión génica.
+
+Y se puede pasar a realizar los analisis estadisticos en R.
 
 
