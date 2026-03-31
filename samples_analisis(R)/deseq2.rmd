@@ -1,0 +1,388 @@
+---
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+## Instalacion de paquetes para deseq2
+
+Antes de empezar, es necesario instalar los paquetes necesarios para el
+análisis de datos de RNA-seq utilizando DESeq2. A continuación se
+muestra el código para instalar los paquetes requeridos:
+
+```{r}
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+#BiocManager::install(c("DESeq2", "biomaRt", "pheatmap", "ggplot2"))
+```
+
+Este código instalará DESeq2, biomaRt, pheatmap y ggplot2, que son
+esenciales para el análisis de datos de RNA-seq. Asegúrate de ejecutar
+este código antes de continuar con el análisis.
+
+## Crear sistema de directorios
+
+Para mantener el proyecto organizado, es recomendable crear un sistema
+de directorios. Puedes usar el siguiente código para crear los
+directorios necesarios o modificarlo para adaptarlo a tus necesidades:
+
+```{r setup, message=FALSE, warning=FALSE}
+
+
+base_dir <- "Resultados_DESeq2" # Cambia esto por el nombre que prefieras para tu proyecto
+# Directorios de salida
+dir_resultados <- file.path(base_dir)
+dir_figuras <- file.path(dir_resultados, "figuras")
+dir_tablas <- file.path(dir_resultados, "tablas")
+dir_pares <- file.path(dir_resultados, "comparaciones_pares")
+
+dir.create(dir_resultados, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_figuras, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_tablas, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_pares, showWarnings = FALSE, recursive = TRUE)
+```
+
+## Carga de datos y metadatos
+
+Es necesario que tengas el archivo .tsv en tu directorio donde estes
+trabajando, el cual contiene los datos de conteo de RNA-seq. Procedemos
+a cargar los datos y los metadatos utilizando el siguiente código:
+
+```{r}
+library(DESeq2)
+
+# Cargar la matriz de conteos generada por RSEM
+counts <- read.table("rsem_gene_expected_count_matrix.tsv", header=TRUE, row.names=1, check.names=FALSE)
+
+# Redondear valores
+counts <- round(counts)
+
+#Crear los metadatos a partir de los nombres de las columnas
+samples <- colnames(counts)
+organs <- gsub("_ERR.*", "", samples) 
+
+# Extraer el nombre del órgano de los nombres de las columnas
+metadata <- data.frame(sample_id=samples, organ=as.factor(organs))
+row.names(metadata) <- metadata$sample_id 
+
+#comprobar que los datos se han cargado correctamente
+all(rownames(metadata) == colnames(counts)) #te debe dar TRUE si los datos se han cargado correctamente
+```
+
+Con los datos cargados y la matriz de metadatos creada, podemos proceder
+con el análisis de DESeq2.
+
+## Análisis de expresion diferencial con DESeq2
+
+Como el objetivo es analizar el cambio de los genes a lo largo de
+múltiples órganos, se usará el test LRT (Likelihood Ratio Test) para
+comparar un modelo completo que incluye el efecto del órgano con un
+modelo reducido que no lo incluye.
+
+```{r}
+#Crear el objeto DESeqDataSet
+dds <- DESeqDataSetFromMatrix(countData = counts, colData = metadata, design = ~ organ)
+
+# Filtrar genes con baja expresión
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+# la variable reduced se establece en ~ 1 para indicar que el modelo  asume que no hay diferencias entre los órganos.
+dds_lrt <- DESeq(dds, test="LRT", reduced = ~ 1)
+
+# Obtener los resultados del análisis de expresión diferencial
+res_lrt <- results(dds_lrt )
+res_df_lrt <- as.data.frame(res_lrt)
+
+#Se añaden las ID de Ensambl como una columna al dataframe de resultados
+res_df_lrt$ensembl_gene_id <- rownames(res_df_lrt)
+
+conteos_normalizados <- counts(dds_lrt, normalized = TRUE)
+```
+
+Con esto logramos obtener un dataframe con los resultados del análisis
+de expresión diferencial, incluyendo las ID de Ensembl para cada gen. A
+partir de aquí, se pueden realizar análisis adicionales, como la
+identificación de genes diferencialmente expresados, la visualización de
+los resultados, o la anotación de los genes utilizando biomaRt etc...
+
+## PCA (aumentar informacion)
+
+
+```{r}
+vsd <- vst(dds_lrt, blind = TRUE)
+
+# PCA
+library(ggplot2)
+
+pca <- plotPCA(vsd, intgroup = "organ", returnData = TRUE)
+percentVar <- round(100 * attr(pca, "percentVar"))
+
+grafico_pca <- ggplot(pca, aes(PC1, PC2, color=organ)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ", percentVar[1], "%")) +
+  ylab(paste0("PC2: ", percentVar[2], "%")) +
+  ggtitle("PCA - Expresión global por organ")
+
+# Guardar PCA
+ggsave(filename = file.path(dir_figuras, "PCA_graphic".pdf"), plot = grafico_pca, width = 6, height = 5)
+```
+
+## Anotación de genes con biomaRt
+
+Para anotar los genes utilizando biomaRt, se puede usar el siguiente
+código:
+
+```{r}
+library(biomaRt)
+# Conectar con la base de datos de Ensembl
+# Cambia  el dataset correspondiente a tu organismo (para trucha arcoíris es "omykiss_gene_ensembl" o "ssalar_gene_ensembl" para Salmo salar)
+ensambl <- useEnsembl(biomart = "genes", dataset = "--------------------", mirror = "useast") 
+
+#Descargar la equivalencia entre ID de Ensambl y nombres de genes
+gene_annotations <- getBM(attributes = c("ensembl_gene_id", "external_gene_name", 'description'),
+                          filters = "ensembl_gene_id",
+                          values = res_df_lrt$ensembl_gene_id,
+                          mart = ensambl)
+
+# Combinar los resultados de DESeq2 con las anotaciones de genes
+res_annotated <- merge(res_df_lrt, gene_annotations, by="ensembl_gene_id", all.x=TRUE)
+
+# limpiar posibles datos vacios (NA) en la columna de nombres de genes
+res_annotated$external_gene_name[is.na(res_annotated$external_gene_name)] <- res_annotated$ensembl_gene_id[is.na(res_annotated$external_gene_name)]
+
+```
+
+Este paso puede cambiarse por su version offline al usar un archivo de
+anotación local, si se prefiere no usar biomaRt.
+
+## Identificación de genes TRIM
+
+Para identificar los genes TRIM en el conjunto de resultados, se puede
+filtrar el dataframe anotado para encontrar aquellos genes que contienen
+"TRIM" en su nombre o descripción. Aquí se muestra cómo hacerlo:
+
+```{r}
+# Buscar genes TRIM por nombre o descripción
+es_trim <- grepl("TRIM", res_annotated$external_gene_name, ignore.case = TRUE) |
+           grepl("tripartite motif", res_annotated$description, ignore.case = TRUE)
+
+trim_genes <- res_annotated[es_trim, ]
+
+# Si el nombre está vacío, usar el Ensembl ID 
+idx_empty <- is.na(trim_genes$external_gene_name) | trim_genes$external_gene_name ==""
+trim_genes$external_gene_name[idx_empty] <- trim_genes$ensembl_gene_id[idx_empty]
+
+# Pasar nombres a mayúsculas para estandarizar
+trim_genes$external_gene_name <- toupper(trim_genes$external_gene_name)
+
+# Evitar nombres repetidos haciendo únicos los nombres de genes
+trim_genes$external_gene_name <- make.unique(trim_genes$external_gene_name)
+
+# Filtrar genes TRIM significativos según el valor de p ajustado
+trim_significant <- trim_genes[!is.na(trim_genes$padj) & trim_genes$padj < 0.05, ]
+
+# Ver cuántos genes TRIM significativos se han encontrado
+nrow(trim_significant)
+```
+
+Este código buscará genes que contengan "TRIM" en su nombre y luego
+filtrará aquellos que sean significativamente diferencialmente
+expresados (con un valor de p ajustado menor a 0 .05). El número de
+genes TRIM diferencialmente expresados se mostrará al final.
+
+## Visualización de resultados
+
+Para visualizar los resultados del análisis de expresión diferencial, se
+pueden crear gráficos como un MA plot o un heatmap de los genes más
+significativos. Aquí se muestra cómo crear un MA plot:
+
+```{r}
+library(pheatmap)
+if (nrow(trim_significant) > 0) {
+
+# Preparar matriz de expresión para genes TRIM significativos
+matriz_trims <- assay(vsd)[trim_significant$ensembl_gene_id, , drop = FALSE]
+
+# Poner como nombres de fila los nombres de gen ya limpiados
+rownames(matriz_trims) <- trim_significant$external_gene_name
+
+# Escalar por filas para resaltar patrones relativos entre órganos
+matriz_escl <- t(scale(t(matriz_trims)))
+
+# Anotación de columnas
+nombres_muestras <- colnames(matriz_escl)
+nombres_organos <- gsub("_ERR.*", "", nombres_muestras)
+
+anotacion_columnas <- data.frame(Organo = nombres_organos)
+rownames(anotacion_columnas) <- nombres_muestras
+
+# Heatmap
+pheatmap(
+  matriz_escl,
+  annotation_col = anotacion_columnas,
+  show_colnames = FALSE,
+  fontsize_row = 6,
+  main = "Expresión de genes diferencialmente expresados",
+  filename = file.path(dir_figuras, "Heatmap_TRIM_significativos.pdf"),
+  width = 8,
+  height = 10
+)
+} else {
+  cat("No se encontraron genes TRIM significativamente diferencialmente expresados.\n")
+}
+```
+
+Este código creará un heatmap que muestra la expresión de los genes TRIM
+significativos a través de los diferentes órganos, con las columnas
+coloreadas según el órgano correspondiente. Asegúrate de ajustar los
+nombres de las columnas y filas según tus datos específicos.
+
+Se puede crear un heatmap similar para todos los genes TRIM, no solo los
+significativos, si se prefiere tener una visión más completa del patrón
+de expresión de estos genes. Para esto se deberia usar la matriz de
+expresión de todos los genes TRIM encontrados, no solo los
+significativos, y seguir un proceso similar para la visualización.
+
+```{r}
+# matriz_trims <- assay(vsd)[trim_genes$ensembl_gene_id, , drop = FALSE]
+# rownames(matriz_trims) <- trim_genes$external_gene_name
+```
+
+## Comparativa entre pares de organos
+
+Si se desea realizar comparaciones por pares entre órganos específicos,
+se puede usar el test Wald de DESeq2 para comparar directamente dos
+órganos. Aquí se muestra cómo hacerlo:
+
+## Comparaciones por pares entre órganos
+
+```{r}
+# Realizar análisis de expresión diferencial usando el test Wald para comparaciones por pares
+dds_wald <- DESeq(dds)
+
+# Comparación por pares: muscle vs liver
+res_muscle_vs_liver <- results(dds_wald, contrast = c("organ", "muscle", "liver"))
+
+# Guardar resultados de la comparación por pares
+write.csv(as.data.frame(res_muscle_vs_liver), file = file.path(dir_pares, "DE_muscle_vs_liver.csv"), row.names = FALSE)
+
+# Generacion de volcano plot y MA plot para muscle vs liver
+res_plot <- as.data.frame(res_muscle_vs_liver)
+res_plot$ensembl_gene_id <- rownames(res_plot)
+res_plot$significant <- ifelse(!is.na(res_plot$padj) & res_plot$padj < 0.05, "Sí", "No")
+res_plot$neglog10padj <- -log10(res_plot$padj)
+vulcan_plot <- ggplot(res_plot, aes(x = log2FoldChange, y = neglog10padj, color = significant)) +
+  geom_point(alpha = 0.6, size = 1.2) + theme_minimal() + labs(title = "Volcano plot: muscle vs liver",
+    x = "log2FoldChange", y = "-log10(padj)")
+
+ggsave(
+  filename = file.path(dir_figuras, "Volcano_muscle_vs_liver.pdf"),
+  plot = vulcan_plot,
+  width = 7,
+  height = 5
+)
+
+pdf(file.path(dir_figuras, "MA_muscle_vs_liver.pdf"), width = 7, height = 5)
+plotMA(res_muscle_vs_liver, main = "MA plot: muscle vs liver", ylim = c(-5, 5))
+dev.off()
+
+# Comparación por pares: brain vs muscle
+res_brain_vs_muscle <- results(dds_wald, contrast = c("organ", "brain", "muscle"))
+
+# Guardar resultados de la comparación por pares
+write.csv(as.data.frame(res_brain_vs_muscle),file = file.path(dir_pares, "DE_brain_vs_muscle.csv"),row.names = FALSE)
+
+# Generacion de volcano plot y MA plot para brain vs muscle
+res_plot <- as.data.frame(res_brain_vs_muscle)
+res_plot$ensembl_gene_id <- rownames(res_plot)
+res_plot$significant <- ifelse(!is.na(res_plot$padj) & res_plot$padj < 0.05, "Sí", "No")
+res_plot$neglog10padj <- -log10(res_plot$padj)
+vulcan_plot <- ggplot(res_plot, aes(x = log2FoldChange, y = neglog10padj, color = significant)) +
+  geom_point(alpha = 0.6, size = 1.2) + theme_minimal() + labs(title = "Volcano plot: brain vs liver",
+    x = "log2FoldChange", y = "-log10(padj)")
+
+ggsave(
+  filename = file.path(dir_figuras, "Volcano_brain_vs_muscle.pdf"),
+  plot = vulcan_plot,
+  width = 7,
+  height = 5
+)
+pdf(file.path(dir_figuras, "MA_brain_vs_muscle.pdf"), width = 7, height = 5)
+plotMA(res_brain_vs_muscle, main = "MA plot: brain vs muscle", ylim = c(-5, 5))
+dev.off()
+
+
+# Comparación por pares: brain vs liver
+res_brain_vs_liver  <- results(dds_wald, contrast = c("organ", "brain", "liver"))
+
+# Guardar resultados de la comparación por pares
+write.csv(as.data.frame(res_brain_vs_liver), file = file.path(dir_pares, "DE_brain_vs_liver.csv"), row.names = FALSE)
+
+# Generacion de volcano plot y MA plot para brain vs liver
+res_plot <- as.data.frame(res_brain_vs_liver)
+res_plot$ensembl_gene_id <- rownames(res_plot)  
+res_plot$significant <- ifelse(!is.na(res_plot$padj) & res_plot$padj < 0.05, "Sí", "No")
+res_plot$neglog10padj <- -log10(res_plot$padj)
+vulcan_plot <- ggplot(res_plot, aes(x = log2FoldChange, y = neglog10padj, color = significant)) +
+  geom_point(alpha = 0.6, size = 1.2) + theme_minimal() + labs(title = "Volcano plot: brain vs liver",
+    x = "log2FoldChange", y = "-log10(padj)")
+ggsave(
+  filename = file.path(dir_figuras, "Volcano_brain_vs_liver.pdf"),
+  plot = vulcan_plot,
+  width = 7,
+  height = 5
+)
+pdf(file.path(dir_figuras, "MA_brain_vs_liver.pdf"), width = 7, height = 5)
+plotMA(res_brain_vs_liver, main = "MA plot: brain vs liver", ylim = c(-5, 5))
+dev.off() 
+
+
+
+```
+
+## Guardado de resultados importantes
+
+Finalmente, es importante guardar los resultados del análisis para su
+uso futuro. Puedes guardar el dataframe anotado con los resultados de
+DESeq2 y las anotaciones de genes en un archivo CSV utilizando el
+siguiente código:
+
+```{r}
+
+
+write.csv(
+  res_annotated,
+  file =file.path(dir_tablas, "1_Resultados_LRT_Completos_(ESPECIE).csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  trim_genes,
+  file = file.path(dir_tablas, "2_Genes_TRIM_(ESPECIE).csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  trim_significant,
+  file = file.path(dir_tablas, "3_Genes_TRIM_Significativos_(ESPECIE).csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  conteos_normalizados,
+  file = file.path(dir_tablas, "4_Conteos_Normalizados_(ESPECIE).csv"),
+  row.names = TRUE
+)
+
+write.csv(
+  pca,
+  file = file.path(dir_tablas, "5_PCA_Datos_(ESPECIE).csv"),
+  row.names = FALSE
+)
+
+
+cat("Los resultados han sido guardados correctamente en el directorio de trabajo.\n")
+
+```
