@@ -45,7 +45,20 @@ Esta carpeta contiene el archivo `deseq2.Rmd` utilizado para el análisis en **R
 Aquí se realiza la exploración, organización, análisis estadístico y representación de los datos de expresión obtenidos tras el procesamiento con STAR y RSEM. 
 
 ---
+### `G.samples_results`
 
+Esta carpeta funciona como una sección de apoyo visual para la interpretación de resultados y como referencia rápida de las salidas más representativas del análisis en **R**.
+
+Entre los resultados incluidos pueden encontrarse:
+
+- **Heatmap**: muestra los patrones de expresión de genes entre muestras o condiciones.
+- **Volcano plot**: permite visualizar genes diferencialmente expresados según magnitud del cambio y significancia estadística.
+- **MA plot**: representa la relación entre la abundancia media y el cambio de expresión entre condiciones.
+- **PCA**: resume la variabilidad global de las muestras y facilita detectar agrupamientos, separación entre condiciones o posibles outliers.
+
+
+
+---
 ## Requisitos generales
 
 Este repositorio está orientado a análisis de RNA-seq en entorno Linux/HPC. Dependiendo de la etapa, pueden ser necesarios:
