@@ -11,20 +11,21 @@ El objetivo de esta distribución es mantener una estructura clara, reproducible
 .
 ├── 0.pre-processing_samples
 ├── 1.processing_samples(STAR)
-└── 2.analysis_samples(R)
+├── 2.analysis_samples(R)
+└── G.samples_results
 ```
 
 
 ## Descripción de carpetas
 
-### `0.pre-processing_samples`
+### 0. Pre-procesamiento de las muestras.
 
 Esta carpeta contiene el script en Bash (`.sh`) encargado de generar la estructura de carpetas del proyecto para su ejecución en el directorio de trabajo.
 
 Su función principal es preparar el entorno de trabajo antes del análisis, creando una organización homogénea para todas las muestras u órganos incluidos en el estudio. Esta etapa es importante porque permite que los scripts posteriores trabajen sobre una estructura fija y predecible, reduciendo errores y mejorando la reproducibilidad del pipeline.
 
 ---
-### `1.processing_samples(STAR)`
+### 1. Procesamiento de las muestras con STAR.
 
 Esta carpeta contiene los scripts de procesamiento bioinformático de las muestras. Aquí se incluyen las etapas principales del pipeline, desde la limpieza de lecturas hasta la alineación y cuantificación.
 
@@ -38,14 +39,14 @@ Esta carpeta representa el núcleo del procesamiento de datos crudos de RNA-seq.
 
 ---
 
-### `2.analysis_samples(R)`
+### 2. Analisis de conteos con R.
 
 Esta carpeta contiene el archivo `deseq2.Rmd` utilizado para el análisis en **R** de los resultados generados en la fase anterior.
 
 Aquí se realiza la exploración, organización, análisis estadístico y representación de los datos de expresión obtenidos tras el procesamiento con STAR y RSEM. 
 
 ---
-### `G.samples_results`
+### 3. Ejemplos de resultados.
 
 Esta carpeta funciona como una sección de apoyo visual para la interpretación de resultados y como referencia rápida de las salidas más representativas del análisis en **R**.
 
