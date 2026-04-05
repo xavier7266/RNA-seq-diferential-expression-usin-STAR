@@ -41,7 +41,7 @@ Esta carpeta representa el núcleo del procesamiento de datos crudos de RNA-seq.
 ---
 
 ### 2. Analisis de conteos con R.
-#### (`2.analisis_samples´)
+#### (`2.analisis_samples`)
 
 Esta carpeta contiene el archivo `deseq2.Rmd` utilizado para el análisis en **R** de los resultados generados en la fase anterior.
 
