@@ -1,0 +1,447 @@
+
+# Análisis comparativo entre genes trim de 3 espcies: salmón atlántico (Salmo salar) y Trucha arcoíris (Oncorhynchus mykiss).
+
+En este script se desarrolla una propuesta de analisis comparativo entre los genes trim de 2 especies: Salmon atlántico (Salmo salar) y Trucha 
+arcoíris (Oncorhynchus mykiss). El objetivo es identificar similitudes y diferencias en la expresión de estos genes entre las dos especies, lo que 
+podría proporcionar información valiosa sobre sus funciones biológicas y adaptaciones evolutivas.
+
+Para este análisis se utilizarán datos de expresión génica obtenidos a partir de datos previamente procesados y normalizados con el paquete DESeq2 de la pipeline 
+previamente desarrollada.
+
+## Cargar las bibliotecas necesarias.
+```{r}
+library(biomaRt)    
+library(ggplot2)
+library(dplyr)
+library(pheatmap)
+library(ggrepel)    
+library(tidyr)
+library(tibble)
+
+```
+Estas librerias son necesarias por las siguientes funciones que realizan:
+- `biomaRt`: Para acceder a bases de datos biológicas y obtener información sobre los genes (ortologia).
+- `ggplot2`: Para crear gráficos y visualizaciones de los datos.
+- `dplyr`: Para manipular y transformar los datos.
+- `pheatmap`: Para crear mapas de calor.
+- `ggrepel`: Para etiquetar puntos en gráficos de ggplot2 sin solapamiento.
+- `tidyr`: Para reformatear datos.
+- `tibble`: Para crear data frames.
+
+## Configuracion de rutas de datos y parametros.
+
+Para usar este archivo .Rmd, es necesario configurar las rutas de los datos de expresión génica y los parámetros de análisis. A continuación se 
+muestra un ejemplo de cómo configurar estas rutas y parámetros:
+
+```{r}
+# Configuración de rutas de datos
+ruta_salar <- "../test-afinamiento.Salmon/Resultados_DESeq2/tablas"
+ruta_omykiss <- "../test-afinamiento.Trucha/Resultados_DESeq2/tablas"
+
+# Tags de cada especie para identificar los archivos correspondientes -> los mismos usados en la pipeline de DESeq2
+tag_salar <- "Salmo Salar"
+tag_omykiss <- "omykiss"
+
+# Carpeta de salida para los resultados del análisis comparativo
+dir_comparativa <- "Resultados_comparativa"
+dir_figuras_comp <- file.path(dir_comparativa, "Figuras")
+dir_tablas_comp <- file.path(dir_comparativa, "Tablas")
+
+dir.create(dir_figuras_comp, recursive = TRUE, showWarnings = FALSE)
+dir.create(dir_tablas_comp, recursive = TRUE, showWarnings = FALSE)
+
+# Umbral de significancia para considerar un gen como diferencialmente expresado
+padj_cutoff <- 0.05
+
+```
+
+En este bloque se configuran las rutas de los datos de expresión génica para ambas especies, así como los tags que se utilizaron en la pipeline de 
+DESeq2 para identificar los archivos correspondientes. Además, se crean las carpetas de salida para los resultados del análisis comparativo, incluyendo 
+subcarpetas para figuras y tablas. Finalmente, se establece un umbral de significancia (padj_cutoff) para considerar un gen como diferencialmente 
+expresado en el análisis comparativo.
+
+## Cargar los datos de expresión génica para ambas especies.
+
+En lugar de volver a ejecutar deseq2, se cargaran directamente los CSVs que ya se generaron y se guardaron previamente en la pipeline de DESeq2. 
+Esto permite ahorrar tiempo y recursos computacionales, ya que los datos ya han sido procesados y normalizados.
+
+Se deben cargar 4 archivos por especie:
+
+- LRT completo (que incluye todos los genes analizados, tanto los que son diferencialmente expresados como los que no lo son).
+- TRIM todos (que incluye solo los genes trim, independientemente de si son diferencialmente expresados o no).
+- TRIM significativos (que incluye solo los genes trim que son diferencialmente expresados según el umbral de significancia establecido).
+- Conteos normalizados (que incluye los conteos normalizados de expresión génica para los genes trim, necesarios para visualizaciones y análisis posteriores).
+
+```{r}
+
+# Función para cargar los datos de expresión génica
+
+# Salmón
+
+lrt_salar        <- read.csv(file.path(ruta_salar, paste0("1_Resultados_LRT_Completos_RSEM_", tag_salar, ".csv")))
+trim_todos_salar <- read.csv(file.path(ruta_salar, paste0("2_Genes_TRIM_RSEM_", tag_salar, ".csv")))
+trim_sig_salar   <- read.csv(file.path(ruta_salar, paste0("3_Genes_TRIM_Significativos_LRT_RSEM_", tag_salar, ".csv")))
+conteos_salar    <- read.csv(file.path(ruta_salar, paste0("5_Conteos_Normalizados_RSEM_", tag_salar, ".csv")), row.names = 1)
+
+# Trucha 
+lrt_omykiss        <- read.csv(file.path(ruta_omykiss, paste0("1_Resultados_LRT_Completos_RSEM_", tag_omykiss, ".csv")))
+trim_todos_omykiss <- read.csv(file.path(ruta_omykiss, paste0("2_Genes_TRIM_RSEM_", tag_omykiss, ".csv")))
+trim_sig_omykiss   <- read.csv(file.path(ruta_omykiss, paste0("3_Genes_TRIM_Significativos_LRT_RSEM_", tag_omykiss, ".csv")))
+conteos_omykiss    <- read.csv(file.path(ruta_omykiss, paste0("5_Conteos_Normalizados_RSEM_", tag_omykiss, ".csv")), row.names = 1)
+
+# verificacion rapida de los datos cargados
+cat("SALMON", "\n")
+print(dim(lrt_salar))
+cat("TRUCHA", "\n")
+print(dim(lrt_omykiss))
+
+```
+
+En este bloque se define una función para cargar los datos de expresión génica para ambas especies. Luego, se utilizan esta función para cargar los archivos
+correspondientes a cada especie, incluyendo los resultados del LRT completo, los genes trim (todos y significativos) y los conteos normalizados.
+Finalmente, se realiza una verificación rápida de los datos cargados imprimiendo las dimensiones de los data frames correspondientes al LRT completo 
+para ambas especies. Esto permite asegurarse de que los datos se han cargado correctamente antes de proceder con el análisis comparativo.
+
+## Coneccion a Ensembl para la obtencion de ortologos entre las dos especies.
+
+Esta parte es necesaria que se disponga de conexion a internet, ya que se utilizará el paquete `biomaRt` para acceder a la base de datos de Ensembl 
+y obtener información sobre los genes, incluyendo la identificación de ortólogos entre las dos especies. Esto es crucial para realizar un análisis 
+comparativo significativo, ya que permite identificar genes que son funcionalmente equivalentes entre el salmón atlántico y la trucha arcoíris, 
+lo que a su vez facilita la comparación de sus patrones de expresión y posibles funciones biológicas. Si no se dispone de conexión a internet, 
+este paso no se podrá completar y el análisis comparativo se verá limitado, ya que no se podrán identificar los ortólogos necesarios para la comparación 
+entre las dos especies.
+
+`BiomaRt` es un paquete de R que proporciona una interfaz para acceder a bases de datos biológicas, como Ensembl, y obtener información sobre genes, 
+proteínas y otros datos relacionados. En este caso, `BiomaRT` se utilizara para medir 3 condiciones:
+
+- ortholog_one2one: Genes que tienen un solo ortólogo en la otra especie.
+- omykiss_homolog_perc_id: El porcentaje de identidad entre el gen de trucha y su ortólogo en salmón. (direccion salmón -> trucha)
+- omykiss_homolog_perc_id_r1: El porcentaje de identidad entre el gen de salmón y su ortólogo en trucha. (direccion trucha -> salmón)
+
+```{r}
+# Conexión a Ensembl utilizando biomaRt
+ensembl_salar <- useEnsembl(biomart = "genes", dataset = "ssalar_gene_ensembl", mirror = "useast")
+ 
+# Obtener los ortólogos entre salmón atlántico y trucha arcoíris
+ortologos_raw <- getBM(attributes = c("ensembl_gene_id", "external_gene_name", "omykiss_homolog_ensembl_gene", "omykiss_homolog_associated_gene_name", 
+    "omykiss_homolog_orthology_type", "omykiss_homolog_perc_id", "omykiss_homolog_perc_id_r1"), filters = "ensembl_gene_id",
+     values = trim_sig_salar$ensembl_gene_id, mart = ensembl_salar
+)
+
+```
+Partimos de los TRIM significativos del salmón atlántico para obtener los ortólogos correspondientes en la trucha arcoíris. Se utiliza la función `getBM` de 
+`biomaRt` para obtener los atributos relevantes como:
+
+- ensembl_gene_id = ID del gen en salmón
+- external_gene_name = el nombre del gen
+- omykiss_homolog_ensembl_gene = el ID del ortólogo en trucha
+- omykiss_homolog_associated_gene_name = el nombre del ortólogo en trucha
+- omykiss_homolog_orthology_type = el tipo de ortología
+- omykiss_perc_id = el porcentaje de identidad entre el gen de trucha y su ortólogo en salmón
+- omykiss_homolog_perc_id_r1 = el porcentaje de identidad entre el gen de salmón y su ortólogo en trucha
+
+## Filtrado de ortólogos para obtener solo los genes con ortología one2one y un porcentaje de identidad mayor al 50%. 
+### Este humbral es arbitrario y se puede ajustar según las necesidades del análisis.
+
+```{r}
+ortologos <- ortologos_raw %>%
+    filter(
+        omykiss_homolog_orthology_type == "ortholog_one2one",
+        omykiss_homolog_perc_id > 50,
+        omykiss_homolog_perc_id_r1 > 50,
+        omykiss_homolog_ensembl_gene != ""
+    ) %>%
+    distinct(ensembl_gene_id, .keep_all = TRUE)
+
+cat("Ortologos filtrados (one2one y >50% identidad):", nrow(ortologos), "\n")
+cat("Genes TRIM de salmon sin ortólogo en trucha:     ", nrow(trim_sig_salar) - nrow(ortologos), "\n")
+cat("Genes TRIM de salmon con ortólogo en trucha:     ", nrow(ortologos), "\n")
+
+```
+En este bloque se filtran los ortólogos obtenidos para quedarse solo con aquellos que tienen una ortología de tipo one2one y un porcentaje de identidad mayor 
+al 50% en ambas direcciones (salmón -> trucha y trucha -> salmón). Además, se asegura que el ID del ortólogo en trucha no esté vacío (`omykiss_homolog_ensembl_gene != ""`). 
+Luego, se eliminan los duplicados basándose en el ID del gen en salmón para obtener una lista única de ortólogos (`distinct(ensembl_gene_id, .keep_all = TRUE)`).
+Finalmente, se imprimen estadísticas sobre el número de ortólogos filtrados, así como el número de genes TRIM de salmón que no tienen un ortólogo en trucha 
+y el número de genes TRIM de salmón que sí tienen un ortólogo en trucha.
+
+## Tabla comparativa de expresión génica entre las dos especies para los genes ortólogos identificados.
+
+Se busca cruzar la tabla de ortólogos con los datos de expresión génica (LRT completo) para ambas especies, con el fin de crear una tabla comparativa que 
+incluya información sobre la expresión diferencial de los genes ortólogos en ambas especies. Esta tabla permitirá identificar patrones de expresión compartidos
+o divergentes entre el salmón atlántico y la trucha arcoíris.
+
+El resultado de esta sección será una tabla que contenga la columna "conservacion":
+- "Conservado en ambas": Genes que son diferencialmente expresados en ambas especies.
+- "Solo salmón": Genes que son diferencialmente expresados solo en salmón.
+- "Solo trucha": Genes que son diferencialmente expresados solo en trucha.
+- "No significativo en ninguna": Genes que no son diferencialmente expresados en ninguna de las dos especies.
+
+```{r}
+comparativa <- ortologos %>%
+    # Añador de datos de expresión génica para salmón
+    left_join(lrt_salar %>% 
+        select(ensembl_gene_id, baseMean, log2FoldChange, stat, pvalue, padj) %>%
+        rename( baseMean_salar =baseMean, lfc_salar = log2FoldChange, stat_salar = stat, pvalue_salar = pvalue, padj_salar = padj),
+        by = "ensembl_gene_id"
+    ) %>%
+    # Añadir datos de expresión génica para trucha
+    left_join(lrt_omykiss %>% 
+        select(ensembl_gene_id, baseMean, log2FoldChange, stat, pvalue, padj) %>%
+        rename( baseMean_omykiss =baseMean, lfc_omykiss = log2FoldChange, stat_omykiss = stat, pvalue_omykiss = pvalue, padj_omykiss = padj),
+        by = c("omykiss_homolog_ensembl_gene" = "ensembl_gene_id")
+    ) %>%
+    # Clasificar segun significancia de cada especie
+    mutate(
+        sig_salar = !is.na(padj_salar) & padj_salar < padj_cutoff,
+        sig_omykiss = !is.na(padj_omykiss) & padj_omykiss < padj_cutoff,
+        conservacion = case_when(
+            sig_salar & sig_omykiss ~ "Conservado en ambas",
+            sig_salar & !sig_omykiss ~ "Solo salmón",
+            !sig_salar & sig_omykiss ~ "Solo trucha",
+            TRUE ~ "No significativo en ninguna"
+        ),
+        # Nombre de los genes en Mayuscula para la visualización
+        gen_nombre=toupper(external_gene_name)
+    )
+# Resumen por categoria de conservacion
+cat( "Distribucion por categoria de conservacion:\n")
+print(table(comparativa$conservacion))
+
+write.csv(
+    comparativa, file = file.path(dir_tablas_comp, "tabla_comparativa_ortologos.csv"), row.names = FALSE
+)
+
+#Tabla de solo los genes conservados en ambas especies
+comparativa_conservados <- comparativa %>% filter(conservacion == "Conservado en ambas")
+conservados <- comparativa_conservados
+write.csv(comparativa_conservados, file = file.path(dir_tablas_comp, "tabla_comparativa_ortologos_ambas_especies.csv"), row.names = FALSE)
+
+cat("\nGenes conservados en ambas especies:", nrow(comparativa_conservados), "\n")
+cat("Estos son los candidatos mas inntereasantes.\n")
+
+```
+En este bloque se crea una tabla comparativa que cruza la información de los ortólogos con los datos de expresión génica para ambas especies. 
+Se utilizan `left_join` para agregar las columnas de expresión génica de salmón y trucha a la tabla de ortólogos. Luego, se clasifica cada gen 
+según su significancia en ambas especies utilizando `mutate` y `case_when` para crear una nueva columna "conservacion" que indica si el gen es 
+diferencialmente expresado en ambas especies, solo en salmón, solo en trucha o no es diferencialmente expresado en ninguna de las dos especies. 
+Finalmente, se imprime un resumen de la distribución por categoría de conservación y se guardan las tablas comparativas en archivos CSV para su 
+posterior análisis y visualización.
+
+
+# Visualización de los resultados comparativos.
+
+## Scatter plot para comparar la expresión diferencial entre las dos especies.
+
+Para visualizar estos resultados que tenemos en formato de tablas, se pueden crear diferentes graficos, entre ellos existe el grafico de Scatter plot
+que permite comparar la expresión diferencial (log2FoldChange) de los genes ortólogos entre las dos especies. En este gráfico, cada punto representa 
+un gen ortólogo, y se pueden colorear los puntos según la categoría de conservación para identificar visualmente los genes que son diferencialmente 
+expresados en ambas especies, solo en salmón, solo en trucha o no son diferencialmente expresados en ninguna de las dos especies.
+
+Esto facilita la identificación de patrones de expresión compartidos o divergentes entre el salmón atlántico y la trucha arcoíris.
+
+```{r}
+# Hay que preparar los datos para el scatter plot, asegurando que solo se incluyan los genes con datos de expresión en ambas especies.
+scatter_data <- comparativa %>%
+    filter(!is.na(lfc_salar) & !is.na(lfc_omykiss))
+# Hace falta calcular la correlacion entre los log2FoldChange de ambas especies para los genes conservados en ambas especies.
+cor_val <- round(cor(scatter_data$stat_salar, scatter_data$stat_omykiss, use = "complete.obs"), 3)
+# Crear el scatter plot
+scatter_stat <- ggplot(scatter_data,
+                       aes(x = stat_salar, y = stat_omykiss, color = conservacion)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, color = "grey40",
+              linewidth = 0.6, linetype = "dashed") +
+  geom_abline(intercept = 0, slope = 1,
+              color = "black", linewidth = 0.4, linetype = "dotted") +
+
+  # Etiquetar los genes conservados más destacados
+  geom_label_repel(
+    data = scatter_data %>%
+      filter(conservacion == "Conservado en ambas") %>%
+      arrange(desc(stat_salar + stat_omykiss)) %>%
+      slice_head(n = 10),
+    aes(label = toupper(external_gene_name)),
+    size = 2.8, fontface = "bold",
+    fill  = scales::alpha("white", 0.8),
+    color = "#1a478a",
+    box.padding   = 0.4,
+    point.padding = 0.3,
+    max.overlaps  = Inf
+  ) +
+
+  scale_color_manual(values = c(
+    "Conservado en ambas"          = "#1a478a",
+    "Solo salmón"                  = "#c0392b",
+    "Solo trucha"                  = "#27ae60",
+    "No significativo en ninguna"  = "grey70"
+  )) +
+
+  labs(
+    title    = "Variación entre órganos: Salmón vs Trucha — Genes TRIM ortólogos",
+    subtitle = paste0("Estadístico LRT por especie | r = ", cor_val,
+                      " | línea punteada: diagonal perfecta"),
+    x        = "Estadístico LRT — Salmo salar",
+    y        = "Estadístico LRT — Oncorhynchus mykiss",
+    color    = "Conservación"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+ggsave(
+  filename = file.path(dir_figuras_comp, "1_Scatter_LRT_stat_especies.pdf"),
+  plot     = scatter_stat,
+  width = 9, height = 7
+)
+
+scatter_stat
+
+```
+En este bloque se prepara un scatter plot para comparar el estadístico LRT de los genes ortólogos entre el salmón atlántico y la trucha arcoíris.
+Se filtran los datos para incluir solo los genes que tienen datos de expresión en ambas especies. Luego, se calcula la correlación entre los estadísticos
+LRT de ambas especies para los genes conservados en ambas especies. A continuación, se crea el scatter plot utilizando `ggplot2`, donde cada punto 
+representa un gen ortólogo y se colorea según la categoría de conservación. Se añaden líneas de referencia para facilitar la interpretación del gráfico, 
+y se etiquetan los genes conservados más destacados utilizando `geom_label_repel`.
+
+
+## Heatmap para visualizar los patrones de expresión de los genes ortólogos conservados en ambas especies.
+
+Para visualizar los patrones de expresión de los genes ortólogos conservados en ambas especies, se puede crear un heatmap utilizando el paquete
+`pheatmap`. En este heatmap, se mostrarán los conteos normalizados de expresión génica para los genes ortólogos conservados en ambas especies, 
+con las filas representando los genes y las columnas representando las muestras de ambas especies.
+
+
+```{r}
+#Extraer los genes conservados en ambas especies
+
+ids_salar_conservados <- conservados$ensembl_gene_id
+ids_omykiss_conservados <- conservados$omykiss_homolog_ensembl_gene
+
+# Se debe generar una submatriz de ambas muestras con solo los genes conservados de ambas especies.
+
+mat_salar <- conteos_salar[row.names(conteos_salar) %in% ids_salar_conservados, , drop = FALSE]
+mat_omykiss <- conteos_omykiss[row.names(conteos_omykiss) %in% ids_omykiss_conservados, , drop = FALSE]
+
+# Renombrar filas con los nombres de los genes para una mejor visualización
+nombres_salar <- conservados$gen_nombre[match(row.names(mat_salar), conservados$ensembl_gene_id)]
+row.names(mat_salar) <- make.unique(nombres_salar)
+nombres_omykiss <- conservados$gen_nombre[match(row.names(mat_omykiss), conservados$omykiss_homolog_ensembl_gene)]
+row.names(mat_omykiss) <- make.unique(nombres_omykiss)
+
+# Escalar los datos para el heatmap
+escalar_filas <- function(mat) {
+    mat_esc <- t(scale(t(mat)))
+    mat_esc[is.na(mat_esc)] <- 0
+    mat_esc
+}
+mat_salar_esc <- escalar_filas(mat_salar)
+mat_omykiss_esc <- escalar_filas(mat_omykiss)
+
+# Combinar las matrices escaladas para el heatmap
+colnames(mat_salar_esc) <- paste0("Salar_", colnames(mat_salar_esc))
+colnames(mat_omykiss_esc) <- paste0("Omykiss_", colnames(mat_omykiss_esc))
+mat_combinada <- cbind(mat_salar_esc, mat_omykiss_esc)
+
+#Anotaciones de las columnas para indicar la especie y el tipo de muestra
+col_annotation <- data.frame(
+    Especie = c(rep("S. salar", ncol(mat_salar_esc)), rep("O. mykiss", ncol(mat_omykiss_esc))),
+    Organo = c(gsub("Salar_(.+)_ERR.*", "\\1", colnames(mat_salar_esc)),
+               gsub("Omykiss_(.+)_ERR.*", "\\1", colnames(mat_omykiss_esc))
+               ),
+    row.names = colnames(mat_combinada)
+)
+
+# Colores para las anotaciones
+colores_anotacion <- list(
+  Especie = c("S. salar"  = "#2b2b2b",
+              "O. mykiss" = "#bdbdbd"),
+  Organo = c(
+    "brain" = "#1f78b4",
+    "d_intestine" = "#33a02c",
+    "gill" = "#6a3d9a",
+    "gonad" = "#e31a1c",
+    "kidney" = "#ff7f00",
+    "liver" = "#a65628",
+    "muscle" = "#f781bf"
+  )
+)
+# Crear el heatmap
+pheatmap(
+    mat_combinada,
+    annotation_col = col_annotation,
+    annotation_colors = colores_anotacion,
+    border_color = scales::alpha("black", 0.3), 
+    show_colnames = FALSE,
+    fontsize_row = 7,
+    clustering_distance_cols = "correlation",
+    clustering_distance_rows_= "correlation",
+    main = "Patrones de expresión de genes TRIM ortólogos conservados en ambas especies",
+    filename = file.path(dir_figuras_comp, "2_Heatmap_ortologos_conservados.pdf"),
+    width =14,
+    height = max(8, nrow(mat_combinada) * 0.25)
+)
+
+cat("\nHeatmap generado para los genes ortólogos conservados en ambas especies.\n")
+
+```
+En este bloque se crea un heatmap para visualizar los patrones de expresión de los genes ortólogos conservados en ambas especies.
+Se extraen los IDs de los genes conservados en ambas especies y se generan submatrices de los conteos normalizados para cada especie. Luego, 
+se renombran las filas con los nombres de los genes para una mejor visualización. A continuación, se escalan los datos para el heatmap utilizando 
+una función personalizada que escala por filas. Luego, se combinan las matrices escaladas para crear una matriz completa que incluye las muestras de 
+ambas especies. Se crean anotaciones de columna para indicar la especie y el tipo de muestra, y se definen colores para estas anotaciones.
+Finalmente, se utiliza la función `pheatmap` para crear el heatmap, con opciones para mostrar las anotaciones y ajustar la apariencia del gráfico,
+y se guarda el resultado en un archivo PDF.
+
+## Diagrama de Venn simplificado para visualizar resultados de expresión diferencial entre las dos especies.
+Para visualizar de manera sencilla la superposición de genes diferencialmente expresados entre las dos especies, se puede crear un diagrama 
+de Venn simplificado. En este diagrama, se mostrarán dos círculos que representan los genes diferencialmente expresados en el salmón atlántico
+y en la trucha arcoíris, y la intersección entre los círculos representará los genes que son diferencialmente expresados en ambas especies. 
+
+```{r}
+# Resumen de la conservación de los genes ortólogos
+resumen_conservacion <- comparativa %>%
+    count(conservacion) %>%
+    mutate(conservacion = factor(conservacion, levels = c("Conservado en ambas", "Solo salmón", "Solo trucha", "No significativo en ninguna")))
+barplot_cons <- ggplot(resumen_conservacion, aes(x = conservacion, y = n, fill = conservacion)) +
+    geom_col(width = 0.6, show.legend = FALSE) +
+    geom_text(aes(label = n), vjust = -0.5, fontface = "bold", size = 4) +
+    scale_fill_manual(values = c(
+        "Conservado en ambas"          = "#1a478a",
+        "Solo salmón"                  = "#c0392b",
+        "Solo trucha"                  = "#27ae60",
+        "No significativo en ninguna"  = "grey70"
+    )) +
+    labs(
+        title    = "Distribución de genes TRIM ortólogos según conservación entre especies",
+        x        = NULL,
+        y        = "Número de genes",
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 20, hjust = 1))
+ggsave(
+    filename = file.path(dir_figuras_comp, "3_Barplot_conservacion_ortologos.pdf"),
+    plot     = barplot_cons,
+    width = 8, height = 6
+)
+barplot_cons
+
+```
+En este bloque se crea un diagrama de Venn simplificado utilizando un gráfico de barras para mostrar la distribución de genes TRIM ortólogos 
+según su conservación entre el salmón atlántico y la trucha arcoíris. Se cuenta el número de genes en cada categoría de conservación y se crea
+un gráfico de barras utilizando `ggplot2`, donde cada barra representa una categoría de conservación y su altura representa el número de genes 
+en esa categoría. Se añaden etiquetas con el número de genes en cada barra, se definen colores para cada categoría, y se ajusta la apariencia 
+del gráfico. Finalmente, se guarda el resultado en un archivo PDF.
+
+```{r}
+cat("Analisis y graficas realizadas, todo esta guardado en su respectiva carpeta. \n")
+```
+# Notas finales:
+
+Al ejecutar todo este analisis comparativo, se obtendrán varias tablas y gráficos que proporcionarán información valiosa sobre la expresión 
+diferencial de los genes TRIM. Este archivo es editable y se puede ajustar según las necesidades específicas del análisis, como cambiar los 
+umbrales de significancia, agregar más visualizaciones, o incluir análisis adicionales como enriquecimiento funcional o análisis de redes para 
+los genes ortólogos conservados en ambas especies. Es importante interpretar los resultados con cuidado, considerando las limitaciones del análisis 
+y la biología de las especies involucradas. 
+
+Este archivo puede modificarse para otros tipos de análisis comparativos entre especies, ajustando las rutas de los datos, los parámetros de análisis, 
+y las visualizaciones según sea necesario, cambiando los titulos y etiquetas de los gráficos para reflejar el contexto específico del análisis comparativo 
+que se esté realizando.
