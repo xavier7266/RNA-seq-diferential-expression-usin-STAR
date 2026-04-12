@@ -1,0 +1,720 @@
+
+title: "Análisis de Expresión Diferencial con EdgeR"
+
+Este archivo .Rmd es un ejemplo de como usar EDGER para analizar datos de expresión génica diferencial para comparar entre muestras de diferentes organismos. 
+A continuación se muestra un ejemplo de cómo cargar los datos, realizar el análisis y visualizar los resultados.
+
+# Cargar las librerías necesarias
+
+antes de comenzar, asegúrate de tener instaladas las siguientes librerías: 
+
+-edgeR -> para el análisis de expresión génica diferencial
+-biomaRT -> para la anotación de genes
+-dplyr -> para la manipulación de datos
+-ggplot2 -> para la visualización de datos
+-pheatmap -> para la visualización de mapas de calor
+-ggrepel -> para mejorar la visualización de etiquetas en gráficos
+-tibble -> para trabajar con data frames de manera más eficiente
+
+
+```{r}
+
+
+library(edgeR)
+library(biomaRt)
+library(dplyr)
+library(ggplot2)
+library(pheatmap)
+library(ggrepel)
+library(tibble)
+library(forcats)
+```
+
+A diferencia de DESeq2, que normaliza los datos utilizando el método de tamaño de biblioteca, EDGER utiliza un enfoque basado en la estimación de la dispersión para normalizar los datos usando el metodo TMM (Trimmed Mean of M-values). Esto se hace a través de la función `calcNormFactors()`, que calcula factores de normalización basados en la distribución de los conteos y la dispersión estimada. Esto es especialmente robusto cuando comparas muestras de diferentes organismos, ya que puede manejar diferencias en la composición de los transcriptomas y en la expresión génica entre especies.
+
+# Configuracion de las rutas y parametros previos
+## Definir rutas a archivos .tsv de conteos y parámetros de análisis
+
+En esta sección se establecen los parámetros generales que estructuran el flujo del análisis comparativo entre especies. En primer lugar, se definen las especies de referencia y de estudio, junto con la información necesaria para localizar sus matrices de conteo y sus correspondientes conjuntos de datos en Ensembl. Posteriormente, se especifican los atributos de homología que permitirán identificar genes ortólogos entre ambas especies, paso fundamental para realizar comparaciones biológicas consistentes.
+
+Asimismo, se incorporan los patrones que identifican los distintos órganos analizados, lo que permite organizar adecuadamente las muestras según su tejido de origen. Finalmente, se fijan los umbrales estadísticos que se utilizarán en la identificación de genes diferencialmente expresados, así como los directorios destinados al almacenamiento ordenado de tablas y figuras generadas durante el análisis.
+
+```{r}
+
+# Configuracion de especies, se carga el dataset de ensemble y la ruta del archivo conteos de RSEM.
+especie_ref <- list(nombre = "Salmo salar", prefijo = "salar", dataset ="ssalar_gene_ensembl", ruta_counts = "./salmon/rsem_gene_expected_count_matrix.tsv")
+especie_obj <- list(nombre = "Oncorhynchus mykiss", prefijo = "omykiss", dataset ="omykiss_gene_ensembl", ruta_counts = "./trucha/rsem_gene_expected_count_matrix.tsv")
+
+# Configuracion de atributos de homologia, especie referencia (especie_ref) a especie objetivo (especie_obj), de la plataforma de ensembl
+homolog_attrs <- list(
+  gene_id   = "omykiss_homolog_ensembl_gene",
+  gene_name = "omykiss_homolog_associated_gene_name",
+  type      = "omykiss_homolog_orthology_type",
+  perc_id   = "omykiss_homolog_perc_id",
+  perc_id_r = "omykiss_homolog_perc_id_r1"
+)
+
+# Cargar patrones de analisis entre muestras. (En este caso al investigarse 7 organos de cada una de los organismos, se carga la informacion)
+
+patrones_organos <- c(
+  brain            = "brain",
+  distal_intestine = "d_intestine",
+  gill             = "gill",
+  gonad            = "gonad",
+  kidney           = "kidney",
+  liver            = "liver",
+  muscle           = "muscle"
+)
+
+# Parametros de analisis.
+padj_cutoff <- 0.05     # FDR maximo para considerar a un gen significativo
+lfc_cutoff <- 1         # log2 Fold Change minimo.
+
+#configuracion de ensemble
+biomart_mirror <- "useast"        # se puede configurar con otros mirror como www, useast, uswest, asia etc...
+
+# Directorio de salida para los resultados
+
+dir_figuras <- "Resultados_EdgeR/Figuras"
+dir_tablas  <- "Resultados_EdgeR/Tablas"
+dir.create(dir_figuras, recursive = TRUE, showWarnings = FALSE)
+dir.create(dir_tablas,  recursive = TRUE, showWarnings = FALSE)
+
+```
+Tras esta configuración inicial, quedan definidos los elementos estructurales del análisis: las especies a comparar, los criterios de homología, la organización de las muestras por órgano, los umbrales de significancia y la ubicación de los resultados generados. Esta etapa resulta esencial para garantizar la reproducibilidad del flujo de trabajo y para asegurar que las fases posteriores del análisis se desarrollen de forma coherente y ordenada.
+
+## Cargar los archivos conteos en modo de matrices.
+
+En esta sección se realiza la importación de las matrices de conteo correspondientes a las especies de referencia y de estudio. Para ello, se define una función que permite estandarizar la lectura de los archivos de entrada, asegurando que los datos queden en un formato numérico adecuado para los análisis posteriores. Además, se renombran las columnas mediante un prefijo identificativo, con el fin de facilitar la trazabilidad de las muestras y evitar ambigüedades durante la integración y comparación de resultados.
+
+```{r}
+
+# Creamos una funcion para cargar y preparar los datos de conteo
+
+leer_counts <- function(ruta, prefijo) {
+  x <- read.table(ruta, header = TRUE, row.names = 1,
+                  sep = "\t", check.names = FALSE)
+  x <- round(as.matrix(x))
+  mode(x) <- "numeric"
+  colnames(x) <- paste0(prefijo, "_", colnames(x))
+  return(x)
+}
+
+counts_ref <- leer_counts(especie_ref$ruta_counts, especie_ref$prefijo)
+counts_obj <- leer_counts(especie_obj$ruta_counts, especie_obj$prefijo)
+
+cat(especie_ref$nombre, "→", nrow(counts_ref), "genes,", ncol(counts_ref), "muestras\n")
+cat(especie_obj$nombre, "→", nrow(counts_obj), "genes,", ncol(counts_obj), "muestras\n")
+
+```
+
+Tras este paso, se dispone de dos matrices de conteo correctamente estructuradas, una para cada especie, listas para ser sometidas a procesos de filtrado, anotación o comparación. La impresión del número de genes y muestras actúa como una verificación inicial de integridad, permitiendo confirmar que la carga de los datos se ha realizado de manera correcta.
+
+# Generar anotaciones de genes
+## Conexión a Ensembl, anotación génica e identificación de genes TRIM
+
+En esta sección se establece la conexión con la base de datos Ensembl mediante la herramienta `biomaRt`, utilizando los conjuntos de datos definidos previamente para cada una de las especies analizadas. Esta conexión permite recuperar información de anotación asociada a los identificadores génicos presentes en las matrices de conteo, incorporando para cada gen su identificador Ensembl, su nombre génico externo y una descripción funcional.
+
+Con el fin de evitar redundancias en el código, se define una función que automatiza la extracción de estas anotaciones para ambas especies. Posteriormente, se lleva a cabo la clasificación de los genes pertenecientes a la familia **TRIM** (*Tripartite Motif*), empleando como criterio tanto el nombre del gen como su descripción funcional. Este paso permite construir un subconjunto de genes de interés biológico que será utilizado en etapas posteriores del análisis comparativo.
+
+```{r}
+
+# Coneccion a Ensemble
+
+mart_ref <- useEnsembl("genes", dataset = especie_ref$dataset, mirror = biomart_mirror)
+mart_obj <- useEnsembl("genes", dataset = especie_obj$dataset, mirror = biomart_mirror)
+
+# Generamos el archivo de anotaciones para cada especie con una funcion para no repetir codigo
+anotar <- function(ids,mart) {
+    getBM(attributes = c("ensembl_gene_id", "external_gene_name", "description"),
+                         filters = "ensembl_gene_id",
+                         values = ids,
+                         mart = mart) %>% 
+    distinct(ensembl_gene_id, .keep_all = TRUE)
+}
+
+annot_ref <- anotar(rownames(counts_ref), mart_ref)
+annot_obj <- anotar(rownames(counts_obj), mart_obj)
+
+# Clasificación de genes TRIM por nombre y/o descripción funcional
+marcar_trim <- function(ann) {
+  ann %>% mutate(
+    es_trim = grepl("^trim[0-9a-z._-]*$", external_gene_name, ignore.case = TRUE) |
+              grepl("tripartite motif",    description,        ignore.case = TRUE)
+  )
+}
+
+annot_ref <- marcar_trim(annot_ref)
+annot_obj <- marcar_trim(annot_obj)
+
+trim_ids_ref <- annot_ref$ensembl_gene_id[annot_ref$es_trim]
+trim_ids_obj <- annot_obj$ensembl_gene_id[annot_obj$es_trim]
+
+cat("Genes TRIM en", especie_ref$nombre, ":", length(trim_ids_ref), "\n")
+cat("Genes TRIM en", especie_obj$nombre, ":", length(trim_ids_obj), "\n")
+```
+
+Como resultado de este procedimiento, se obtienen las tablas de anotación para ambas especies y se identifican de manera específica los genes asociados a la familia TRIM. La cuantificación final de estos genes constituye una verificación inicial del proceso de anotación y selección, y proporciona la base necesaria para enfocar el análisis en un conjunto génico funcionalmente relevante dentro del contexto comparativo entre especies.
+
+# Identificacion de ortologos TRIM one2one 
+## Uso de getBM para obtener los ortologos de la especie objetivo contra la especie referencia.
+
+En esta sección se lleva a cabo la identificación de pares de genes ortólogos **one-to-one** pertenecientes a la familia **TRIM** entre la especie de referencia y la especie objetivo. Este tipo de relación ortológica resulta especialmente relevante en estudios comparativos, ya que indica una correspondencia única entre genes de ambas especies.
+
+Para ello, se consulta Ensembl a partir de los genes TRIM previamente identificados en la especie de referencia, recuperando información sobre sus genes homólogos en la especie objetivo, así como el tipo de ortología y los porcentajes de identidad de secuencia. Posteriormente, se aplica un filtrado estricto para conservar únicamente aquellos pares que presentan una relación **ortholog_one2one**, que están presentes en las matrices de conteo de ambas especies y que, además, también han sido clasificados como genes TRIM en la especie objetivo.
+
+
+
+```{r}
+ortologos_raw <- getBM(
+  attributes = c("ensembl_gene_id", "external_gene_name",
+                 homolog_attrs$gene_id,
+                 homolog_attrs$gene_name,
+                 homolog_attrs$type,
+                 homolog_attrs$perc_id,
+                 homolog_attrs$perc_id_r),
+  filters = "ensembl_gene_id",
+  values  = trim_ids_ref,
+  mart    = mart_ref
+)
+
+ortologos_trim <- ortologos_raw %>%
+  filter(
+    .data[[homolog_attrs$type]]    == "ortholog_one2one",
+    .data[[homolog_attrs$gene_id]] != "",
+    ensembl_gene_id                %in% rownames(counts_ref),
+    .data[[homolog_attrs$gene_id]] %in% rownames(counts_obj),
+    .data[[homolog_attrs$gene_id]] %in% trim_ids_obj
+  ) %>%
+  transmute(
+    gene_id_ref   = ensembl_gene_id,
+    gene_name_ref = external_gene_name,
+    gene_id_obj   = .data[[homolog_attrs$gene_id]],
+    gene_name_obj = .data[[homolog_attrs$gene_name]],
+    perc_id_ref   = .data[[homolog_attrs$perc_id]],
+    perc_id_obj   = .data[[homolog_attrs$perc_id_r]]
+  ) %>%
+  distinct(gene_id_ref, gene_id_obj, .keep_all = TRUE)
+
+cat("Pares ortólogos TRIM one-to-one:", nrow(ortologos_trim), "\n")
+
+write.csv(ortologos_trim,
+          file.path(dir_tablas, paste0("ortologos_trim_",
+                    especie_ref$prefijo, "_vs_", especie_obj$prefijo, ".csv")),
+          row.names = FALSE)
+```
+
+Como resultado de este procedimiento, se obtiene una tabla depurada con los pares de genes TRIM ortólogos one-to-one entre ambas especies, incluyendo sus identificadores, nombres génicos y porcentajes de identidad. La impresión del número total de pares ortólogos permite verificar la magnitud del conjunto retenido, mientras que la exportación de la tabla en formato .csv garantiza su disponibilidad para análisis posteriores, así como su correcta documentación dentro del flujo de trabajo.
+
+
+## Contruccion de la matriz combinada
+
+
+Una vez identificados los pares de genes ortólogos **one-to-one** de la familia **TRIM**, se procede a construir una matriz de conteo combinada que integre la información de ambas especies en una única estructura de datos. Este paso es fundamental para permitir comparaciones directas entre muestras, ya que reúne en una misma matriz los conteos correspondientes a genes ortólogos equivalentes.
+
+Para ello, se extraen de cada matriz original únicamente aquellos genes que forman parte del conjunto de ortólogos previamente definido. Posteriormente, los identificadores génicos de la especie objetivo se reemplazan por los identificadores de la especie de referencia, con el fin de alinear ambas matrices bajo una misma correspondencia de filas. De esta manera, cada fila de la matriz resultante representa un mismo par ortológico entre especies, lo que facilita los análisis comparativos posteriores.
+
+
+```{r}
+
+counts_ref_ortho <- counts_ref[ortologos_trim$gene_id_ref, , drop = FALSE]
+counts_obj_ortho <- counts_obj[ortologos_trim$gene_id_obj, , drop = FALSE]
+
+# Alinear filas: los genes de especie_obj toman el ID de especie_ref como referencia
+rownames(counts_obj_ortho) <- ortologos_trim$gene_id_ref
+
+counts_combined <- cbind(counts_ref_ortho, counts_obj_ortho)
+
+cat("Matriz combinada:", nrow(counts_combined), "genes x", ncol(counts_combined), "muestras\n")
+```
+Como resultado, se obtiene una matriz integrada en la que las filas corresponden a genes ortólogos TRIM y las columnas a las muestras de ambas especies. La impresión de sus dimensiones permite comprobar que la combinación se ha realizado correctamente, verificando tanto el número de genes retenidos como el total de muestras incluidas en el análisis conjunto.
+
+## Contruccion de metadatos de las muestras
+
+En esta sección se construye la tabla de metadatos asociada a la matriz de conteo combinada. Los metadatos constituyen un elemento fundamental en cualquier análisis de expresión génica, ya que permiten describir de forma estructurada a qué condición biológica pertenece cada muestra. En este caso, se busca identificar para cada muestra la especie de procedencia, el órgano del que fue obtenida y el grupo experimental al que pertenece dentro del análisis conjunto.
+
+Para ello, el bloque se organiza en varias etapas. En primer lugar, se define una función que permite asignar automáticamente el órgano a cada muestra a partir de su nombre, utilizando patrones de texto previamente establecidos. A continuación, se genera una tabla básica de metadatos a partir de los nombres de las columnas de la matriz combinada, incorporando la especie correspondiente a cada muestra según su procedencia. Posteriormente, se añade la variable órgano, se verifica que todas las muestras hayan podido ser clasificadas correctamente y, finalmente, se construye una variable de grupo que combina especie y órgano. Esta última será especialmente útil en análisis posteriores, ya que resume en una sola etiqueta la identidad biológica de cada muestra.
+
+
+```{r}
+asignar_organo <- function(nombres, patrones) {
+  sapply(nombres, function(x) {
+    hit <- names(patrones)[sapply(patrones, grepl, x = x, ignore.case = TRUE)]
+    if (length(hit) == 1) hit else NA_character_
+  }, USE.NAMES = FALSE)
+}
+
+metadata <- data.frame(
+  muestra = colnames(counts_combined),
+  especie = c(rep(especie_ref$prefijo, ncol(counts_ref_ortho)),
+              rep(especie_obj$prefijo, ncol(counts_obj_ortho))),
+  stringsAsFactors = FALSE
+)
+
+metadata$organo <- asignar_organo(metadata$muestra, patrones_organos)
+
+if (any(is.na(metadata$organo))) {
+  stop("Muestras sin órgano asignado: ",
+       paste(metadata$muestra[is.na(metadata$organo)], collapse = ", "),
+       "\nRevisa el vector 'patrones_organos' en el bloque de configuración.")
+}
+
+metadata$grupo <- paste0(metadata$especie, "_", metadata$organo)
+
+cat("Distribución de muestras:\n")
+print(table(metadata$especie, metadata$organo))
+
+write.csv(metadata, file.path(dir_tablas, "metadata_muestras.csv"), row.names = FALSE)
+```
+Como resultado, se obtiene una tabla de metadatos en la que cada muestra queda asociada a su especie, órgano y grupo experimental. Además, la verificación de muestras no clasificadas permite detectar errores de asignación antes de continuar con el análisis, mientras que la exportación del archivo facilita su trazabilidad y reutilización en pasos posteriores.
+
+
+# Aplicacion de EdgeR
+
+En esta etapa se aplica el paquete `edgeR` para analizar la expresión génica diferencial a partir de la matriz de conteos combinada. El procedimiento incluye la construcción del objeto de análisis, el filtrado de genes con baja expresión, la normalización entre muestras, la estimación de la dispersión biológica y el ajuste de modelos estadísticos para comparar ambas especies dentro de cada órgano. Este enfoque permite identificar variaciones de expresión en genes ortólogos TRIM considerando la estructura del diseño experimental.
+
+## Normalizacion y filtrado
+
+En primer lugar, se construye un objeto `DGEList` a partir de la matriz de conteos y de la variable de agrupación definida en los metadatos. Posteriormente, se eliminan los genes con expresión insuficiente mediante `filterByExpr`, conservando únicamente aquellos que presentan señal informativa para el análisis diferencial. Finalmente, se aplican factores de normalización con `calcNormFactors`, lo que permite corregir diferencias de composición y tamaño de biblioteca entre muestras.
+
+```{r}
+dge <- DGEList(counts = counts_combined, group = metadata$grupo)
+dge <- dge[filterByExpr(dge), , keep.lib.sizes = FALSE]
+dge <- calcNormFactors(dge)
+
+cat("Genes conservados tras filtrado:", nrow(dge), "\n")
+```
+Como resultado, se obtiene un objeto de expresión filtrado y normalizado, adecuado para el modelado estadístico posterior. El número de genes conservados tras el filtrado permite verificar cuántas variables permanecen en el análisis después de excluir aquellas con baja expresión.
+
+## Diseño experimental y dispersión
+
+Una vez preparados los datos, se define la matriz de diseño experimental a partir de los grupos biológicos construidos previamente. Esta matriz especifica la estructura de comparación entre especie y órgano, y constituye la base para el ajuste del modelo estadístico. A continuación, se estima la dispersión con estimateDisp, paso esencial en edgeR, ya que permite cuantificar la variabilidad biológica entre muestras y ajustar adecuadamente la inferencia estadística. Finalmente, se representa el coeficiente de variación biológica mediante un gráfico BCV.
+
+```{r}
+design <- model.matrix(~ 0 + grupo, data = metadata)
+colnames(design) <- gsub("grupo", "", colnames(design))
+
+dge <- estimateDisp(dge, design)
+
+pdf(file.path(dir_figuras, paste0("BCV_", especie_ref$prefijo, "_vs_", especie_obj$prefijo, ".pdf")), width = 6, height = 4)
+plotBCV(dge)
+title("Coeficiente de variación biológica (BCV)")
+
+
+
+```
+Tras este paso, queda definida la estructura del diseño experimental y estimada la variabilidad biológica de los datos. El gráfico BCV permite evaluar visualmente la relación entre abundancia y dispersión, aportando una primera aproximación a la estabilidad de las medidas de expresión entre muestras
+
+## Modelo y contrastes por órgano
+
+En esta fase se ajusta un modelo lineal generalizado con enfoque cuasi-likelihood mediante glmQLFit, una estrategia robusta para el análisis de expresión diferencial en edgeR. Posteriormente, se realizan contrastes independientes para cada órgano, comparando la especie de referencia frente a la especie objetivo dentro de un mismo tejido. Para ello, se define una función que genera automáticamente el contraste correspondiente, ejecuta la prueba estadística y devuelve la tabla completa de resultados para ese órgano.
+
+Finalmente, los resultados de todos los órganos se integran en una única tabla, a la que se añaden las anotaciones génicas y la correspondencia ortológica previamente obtenidas.
+
+```{r edger_contrastes}
+fit <- glmQLFit(dge, design)
+
+organos_presentes <- unique(metadata$organo)
+
+hacer_contraste <- function(organo) {
+  g_ref <- paste0(especie_ref$prefijo, "_", organo)
+  g_obj <- paste0(especie_obj$prefijo, "_", organo)
+
+  if (!all(c(g_ref, g_obj) %in% colnames(design))) {
+    message("Saltando '", organo, "': no hay muestras de ambas especies.")
+    return(NULL)
+  }
+
+  contraste <- makeContrasts(contrasts = paste0(g_ref, " - ", g_obj), levels = design)
+
+  topTags(glmQLFTest(fit, contrast = contraste), n = Inf)$table %>%
+    rownames_to_column("gene_id_ref") %>%
+    mutate(organo = organo)
+}
+
+resultados_lista <- lapply(organos_presentes, hacer_contraste)
+names(resultados_lista) <- organos_presentes
+
+resultados_todos <- bind_rows(resultados_lista) %>%
+  left_join(select(annot_ref, ensembl_gene_id, external_gene_name, description), by = c("gene_id_ref" = "ensembl_gene_id")) %>%
+  left_join(select(ortologos_trim, gene_id_ref, gene_name_obj), by = "gene_id_ref") %>%
+  rename(gene_name_ref = external_gene_name) %>%
+  relocate(organo, gene_id_ref, gene_name_ref, gene_name_obj, logFC, FDR)
+
+write.csv(resultados_todos,
+          file.path(dir_tablas, paste0("resultados_edger_", especie_ref$prefijo, "_vs_", especie_obj$prefijo, ".csv")), row.names = FALSE)
+
+cat("Total de resultados:", nrow(resultados_todos), "\n")
+```
+Como resultado, se obtiene una tabla unificada con los contrastes de expresión diferencial para todos los órganos analizados, incluyendo medidas de cambio de expresión, significancia estadística y anotación funcional. Esta salida constituye la base para la identificación e interpretación de genes TRIM diferencialmente expresados entre ambas especies.
+
+## Genes significativos
+
+Una vez obtenida la tabla global de resultados para todos los órganos analizados, se procede a identificar aquellos genes que cumplen simultáneamente los criterios de significancia estadística y magnitud del cambio de expresión previamente definidos. En este caso, se seleccionan los genes con un valor de **FDR** inferior al umbral establecido y con un valor absoluto de **logFC** igual o superior al punto de corte fijado. Este filtrado permite concentrar la atención en aquellos genes cuya variación de expresión resulta, al mismo tiempo, estadísticamente robusta y biológicamente relevante.
+
+
+```{r significativos}
+sig <- resultados_todos %>%
+  filter(FDR < padj_cutoff, abs(logFC) >= lfc_cutoff)
+
+cat("Genes TRIM significativos (FDR <", padj_cutoff, ", |logFC| >=", lfc_cutoff, "):",
+    nrow(sig), "\n\n")
+
+print(sig %>% arrange(FDR) %>% head(20))
+
+write.csv(sig,
+          file.path(dir_tablas, paste0("significativos_", especie_ref$prefijo, "_vs_", especie_obj$prefijo, ".csv")), row.names = FALSE)
+```
+
+Como resultado, se obtiene un subconjunto de genes TRIM diferencialmente expresados que cumplen los criterios establecidos de significancia. Además, la visualización de los primeros genes ordenados por FDR permite una inspección rápida de los resultados más sólidos, mientras que la exportación del archivo facilita su análisis e interpretación posterior.
+
+
+
+# Visualizacion de resultados
+
+En esta sección se generan distintas representaciones gráficas a partir de los resultados obtenidos con `edgeR`, con el objetivo de facilitar su interpretación biológica. En conjunto, estas visualizaciones permiten identificar qué genes presentan cambios de expresión relevantes, cómo se distribuyen entre órganos y de qué manera se agrupan sus patrones de expresión entre muestras. De este modo, la fase gráfica complementa el análisis estadístico previo y aporta una visión más sintética e intuitiva de los resultados.
+
+## Vulcan-plots por ogranos.
+
+El volcano plot permite representar simultáneamente la magnitud del cambio de expresión y la significancia estadística de cada gen analizado. En este caso, la gráfica se construye de forma separada para cada órgano, lo que permite comparar visualmente la distribución de genes diferencialmente expresados entre tejidos. Además, se resaltan en color los genes que cumplen los umbrales de significancia definidos previamente y se etiquetan aquellos genes significativos para facilitar su identificación directa.
+
+
+```{r volcano, fig.width=12, fig.height=8}
+# Numero de genes a etiquetar en cada panel.
+
+top_n_labels <- 5
+
+#preparar datos con clasificacion de direccion
+
+volcano_data <- resultados_todos %>%
+  mutate(
+    sig       = FDR < padj_cutoff & abs(logFC) >= lfc_cutoff,
+    direccion = case_when(
+      sig & logFC > 0 ~ paste("Mayor en", especie_ref$nombre),
+      sig & logFC < 0 ~ paste("Mayor en", especie_obj$nombre),
+      TRUE            ~ "No significativo"
+    )
+  ) %>%
+  group_by(organo) %>%
+  mutate(
+    rank_fdr = rank(FDR, ties.method = "first"),
+    etiqueta = ifelse(sig & rank_fdr <= top_n_labels, toupper(gene_name_ref), NA)
+  ) %>%
+  ungroup()
+
+# Paleta de colores
+
+lbl_ref <- paste("Mayor en", especie_ref$nombre)
+lbl_obj <- paste("Mayor en", especie_obj$nombre)
+
+colores_volcano <- setNames(
+  c("#C0392B", "#2471A3", "grey80"),          # rojo, azul, gris
+  c(lbl_ref, lbl_obj, "No significativo")
+)
+
+tamanios_volcano <- setNames(
+  c(2, 2, 1),
+  c(lbl_ref, lbl_obj, "No significativo")
+)
+
+ggplot(volcano_data, aes(x = logFC, y = -log10(FDR), color = direccion, size = direccion)) +
+  geom_point(alpha = 0.7) +
+  geom_text_repel(
+    aes(label = etiqueta),
+    size          = 2.8,
+    fontface      = "italic",
+    max.overlaps  = 20,
+    box.padding   = 0.4,
+    segment.size  = 0.3,
+    segment.color = "grey50",
+    show.legend   = FALSE
+  ) +
+  scale_color_manual(values = colores_volcano, name = "Expresión diferencial") +
+  scale_size_manual(values  = tamanios_volcano, guide = "none") +
+  facet_wrap(~ organo, ncol = 4, scales = "free_y") +
+  geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), linetype = "dashed", linewidth = 0.4, color = "grey40") +
+  geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed", linewidth = 0.4, color = "grey40") +
+  labs(
+    title    = paste("Expresión diferencial de genes TRIM —", especie_ref$nombre, "vs", especie_obj$nombre),
+    subtitle = paste0("FDR < ", padj_cutoff, "  |  |log₂FC| ≥ ", lfc_cutoff,"  |  Top ", top_n_labels, " genes etiquetados por órgano"),
+    x        = paste0("log₂ Fold Change  (", especie_ref$prefijo, " − ", especie_obj$prefijo, ")"),
+    y        = "−log₁₀(FDR)"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 13),
+    plot.subtitle    = element_text(color = "grey40", size = 9),
+    strip.background = element_rect(fill = "grey92", color = NA),
+    strip.text       = element_text(face = "bold", size = 10),
+    legend.position  = "bottom",
+    legend.title     = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(file.path(dir_figuras, paste0("volcano_",
+                 especie_ref$prefijo, "_vs_", especie_obj$prefijo, ".pdf")),
+       width = 12, height = 8)
+
+
+```
+
+
+## Heatmap de genes significativos.
+
+El heatmap permite visualizar de manera conjunta los patrones de expresión de los genes significativos a través de todas las muestras analizadas. Para ello, se emplean valores de expresión normalizados en escala logarítmica y se representan tras una estandarización por filas, de modo que pueda compararse la variación relativa de cada gen entre muestras. Además, se incorporan anotaciones de especie y órgano en las columnas, lo que facilita la interpretación biológica de los agrupamientos observados.
+
+```{r heatmap, fig.width=8, fig.height=7}
+
+if (nrow(sig) > 1) {
+
+  # CPM en escala log2
+  cpm_mat  <- cpm(dge, log = TRUE)
+  mat_plot <- cpm_mat[unique(sig$gene_id_ref), , drop = FALSE]
+
+  # Etiquetar filas con nombre del gen
+  nombres_genes <- annot_ref$external_gene_name[
+  match(rownames(mat_plot), annot_ref$ensembl_gene_id)]
+
+  rownames(mat_plot) <- make.unique(
+  toupper(
+    ifelse(
+      is.na(nombres_genes) | nombres_genes == "",
+      rownames(mat_plot),
+      nombres_genes)))
+
+  # Ordenar columnas: primero por especie, luego por órgano
+  orden_cols <- order(metadata$especie, metadata$organo)
+  mat_plot   <- mat_plot[, orden_cols, drop = FALSE]
+  meta_ord   <- metadata[orden_cols, ]
+
+  # Tabla de anotación de columnas
+  col_ann <- data.frame(
+    Órgano  = meta_ord$organo,
+    Especie = meta_ord$especie,
+    row.names = meta_ord$muestra
+  )
+
+  # Paletas de colores para anotaciones (sobrias y diferenciadas)
+  organo_colores <- c(
+  brain            = "#4E79A7",  # azul
+  distal_intestine = "#F28E2B",  # naranja
+  gill             = "#59A14F",  # verde
+  gonad            = "#E15759",  # rojo
+  kidney           = "#B07AA1",  # morado
+  liver            = "#9C755F",  # marrón
+  muscle           = "#76B7B2"   # turquesa
+  )
+  # Filtrar solo los órganos que existen en los datos
+  organo_colores <- organo_colores[names(organo_colores) %in% unique(meta_ord$organo)]
+
+  especie_colores <- setNames(
+    c("#E8A0A0", "#A0C4E8"),   # rosa suave para ref, azul suave para obj
+    c(especie_ref$prefijo, especie_obj$prefijo)
+  )
+
+  ann_colors <- list(
+    Órgano  = organo_colores,
+    Especie = especie_colores
+  )
+
+  # Generar heatmap
+  ph <- pheatmap(
+    mat_plot,
+    annotation_col   = col_ann,
+    annotation_colors = ann_colors,
+    scale            = "row",
+    cluster_cols     = FALSE,       # columnas ya ordenadas manualmente
+    cluster_rows     = TRUE,
+    show_colnames    = FALSE,
+    fontsize_row     = 7,
+    fontsize         = 9,
+    border_color     = "grey70",
+    color            = colorRampPalette(rev(RColorBrewer::brewer.pal(11, "RdYlBu")))(100),
+    main             = paste("Genes TRIM significativos —", especie_ref$nombre, "vs", especie_obj$nombre),
+    filename         = file.path(dir_figuras, paste0("heatmap_", especie_ref$prefijo, "_vs_", especie_obj$prefijo, ".pdf")),
+    width = 10, height = 9
+  )
+
+  # Mostrar en el documento
+  pheatmap(
+    mat_plot,
+    annotation_col    = col_ann,
+    annotation_colors = ann_colors,
+    scale             = "row",
+    cluster_cols      = FALSE,
+    cluster_rows      = TRUE,
+    show_colnames     = FALSE,
+    fontsize_row      = 7,
+    fontsize          = 9,
+    border_color      = "grey70",
+    color             = colorRampPalette(rev(RColorBrewer::brewer.pal(11, "RdYlBu")))(100),
+    main              = paste("Genes TRIM significativos —", especie_ref$nombre, "vs", especie_obj$nombre)
+  )
+
+} else {
+  message("Menos de 2 genes significativos — no se genera heatmap.")
+}
+```
+
+
+## Genes diferencialmente expresados por órgano y dirección
+
+Se genera un gráfico de barras que resume el número de genes diferencialmente expresados en cada órgano, distinguiendo la dirección del cambio de expresión. Se añaden etiquetas con el conteo exacto sobre cada barra para facilitar la lectura directa de los valores.
+
+```{r barplot, fig.width=8, fig.height=5}
+
+barplot_data <- sig %>%
+  mutate(
+    direccion = ifelse(
+      logFC > 0,
+      paste("Mayor en", especie_ref$nombre),
+      paste("Mayor en", especie_obj$nombre)
+    ),
+    # Orden de órganos por total de DEGs (descendente)
+    organo = factor(organo, levels = names(sort(table(organo), decreasing = TRUE)))
+  ) %>%
+  count(organo, direccion)
+
+ggplot(barplot_data, aes(x = organo, y = n, fill = direccion)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+  geom_text(
+    aes(label = n),
+    position = position_dodge(width = 0.75),
+    vjust    = -0.4,
+    size     = 3.2,
+    fontface = "bold"
+  ) +
+  scale_fill_manual(
+    values = setNames(c("#C0392B", "#2471A3"), c(lbl_ref, lbl_obj))
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(
+    title    = paste("Genes TRIM DEGs —", especie_ref$nombre, "vs", especie_obj$nombre),
+    subtitle = paste0("FDR < ", padj_cutoff, "  |  |log₂FC| ≥ ", lfc_cutoff),
+    x        = "Órgano",
+    y        = "Número de genes TRIM",
+    fill     = ""
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 13),
+    plot.subtitle    = element_text(color = "grey40", size = 9),
+    axis.text.x      = element_text(angle = 30, hjust = 1, size = 10),
+    legend.position  = "top",
+    legend.text      = element_text(size = 9, face = "italic"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank()
+  )
+
+ggsave(file.path(dir_figuras, paste0("barplot_",
+                 especie_ref$prefijo, "_vs_", especie_obj$prefijo, ".pdf")),
+       width = 8, height = 5)
+```
+
+Se obtiene una síntesis clara de la distribución de genes TRIM diferencialmente expresados entre órganos y especies. Esta visualización resulta especialmente útil para detectar tejidos con mayor número de diferencias transcriptómicas y para identificar hacia qué especie se orienta predominantemente el cambio de expresión en cada caso.
+
+## Dotplot de logFC por gen TRIM y órgano
+
+Para cada gen TRIM ortólogo se representa simultáneamente la magnitud y dirección del cambio de expresión entre especies (color) y la significancia estadística del contraste (tamaño del punto) en cada órgano analizado. Los colores cálidos indican mayor expresión en la especie de referencia y los fríos en la especie objetivo, permitiendo identificar de forma compacta qué genes TRIM presentan divergencia expresiva tejido-específica entre ambas especies.
+
+```{r}
+dotplot_edger <- resultados_todos %>%
+  filter(!is.na(FDR), !is.na(logFC)) %>%
+  mutate(
+    neglog10_fdr = pmin(-log10(FDR), 10),   # tope en 10 para evitar puntos gigantes
+    significativo = FDR < padj_cutoff & abs(logFC) >= lfc_cutoff,
+    # Nombre del gen: usar ref, si vacío usar ID
+    nombre_gen = ifelse(
+      is.na(gene_name_ref) | gene_name_ref == "",
+      gene_id_ref,
+      toupper(gene_name_ref)
+    )
+  ) %>%
+  # Ordenar genes por logFC medio absoluto descendente
+  mutate(nombre_gen = forcats::fct_reorder(nombre_gen, abs(logFC), .fun = mean))
+
+# ── 2. Dotplot ────────────────────────────────────────────────────────────────
+p_dot_edger <- ggplot(dotplot_edger,
+                      aes(x = organo, y = nombre_gen,
+                          color = logFC, size = neglog10_fdr,
+                          alpha = significativo)) +
+  geom_point() +
+  # Línea de referencia en logFC = 0
+  geom_vline(xintercept = seq(0.5, length(unique(dotplot_edger$organo)) + 0.5),
+             color = "grey90", linewidth = 0.3) +
+  scale_color_distiller(
+    palette   = "RdYlBu",
+    direction = -1,
+    limits    = c(-max(abs(dotplot_edger$logFC), na.rm = TRUE),
+                   max(abs(dotplot_edger$logFC), na.rm = TRUE)),
+    name      = paste0("log₂FC\n(", especie_ref$prefijo, " − ", especie_obj$prefijo, ")")
+  ) +
+  scale_size_continuous(
+    range  = c(0.8, 6),
+    name   = "−log₁₀(FDR)",
+    breaks = c(2, 5, 10),
+    labels = c("2", "5", "≥10")
+  ) +
+  scale_alpha_manual(
+    values = c("TRUE" = 1, "FALSE" = 0.25),
+    guide  = "none"   # no mostrar leyenda de alpha
+  ) +
+  labs(
+    title    = paste("Divergencia expresiva de genes TRIM —",
+                     especie_ref$nombre, "vs", especie_obj$nombre),
+    subtitle = paste0("Color: dirección del cambio  |  Tamaño: significancia  |  ",
+                      "Transparente: FDR ≥ ", padj_cutoff, " o |log₂FC| < ", lfc_cutoff),
+    x        = "Órgano",
+    y        = "Gen TRIM"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 13),
+    plot.subtitle    = element_text(color = "grey40", size = 9),
+    axis.text.x      = element_text(angle = 35, hjust = 1, size = 9),
+    axis.text.y      = element_text(size = 7, face = "italic"),
+    legend.position  = "right",
+    legend.title     = element_text(size = 9, face = "bold"),
+    panel.grid.major = element_line(color = "grey92"),
+    panel.grid.minor = element_blank()
+  )
+
+print(p_dot_edger)
+
+ggsave(
+  filename = file.path(dir_figuras, paste0("Dotplot_TRIM_",
+             especie_ref$prefijo, "_vs_", especie_obj$prefijo, ".pdf")),
+  plot     = p_dot_edger,
+  width    = 9,
+  height   = max(4, length(unique(dotplot_edger$nombre_gen)) * 0.30)
+)
+
+
+
+```
+
+
+
+# 10. Resumen final
+
+```{r resumen}
+cat("════════════════════════════════════════\n")
+cat("  RESUMEN DEL ANÁLISIS\n")
+cat("════════════════════════════════════════\n")
+cat("  Especie referencia  :", especie_ref$nombre, "\n")
+cat("  Especie objetivo    :", especie_obj$nombre, "\n")
+cat("────────────────────────────────────────\n")
+cat("  Genes TRIM ref      :", length(trim_ids_ref), "\n")
+cat("  Genes TRIM obj      :", length(trim_ids_obj), "\n")
+cat("  Pares ortólogos     :", nrow(ortologos_trim), "\n")
+cat("  Genes tras filtrado :", nrow(dge), "\n")
+cat("  Resultados totales  :", nrow(resultados_todos), "\n")
+cat("  Genes significativos:", nrow(sig), "\n")
+cat("════════════════════════════════════════\n\n")
+
+cat("Distribución por órgano:\n")
+print(table(sig$organo))
+
+sessionInfo()
+```
+
