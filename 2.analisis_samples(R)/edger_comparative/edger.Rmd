@@ -28,6 +28,9 @@ library(pheatmap)
 library(ggrepel)
 library(tibble)
 library(forcats)
+library(UpSetR)
+
+
 ```
 
 A diferencia de DESeq2, que normaliza los datos utilizando el método de tamaño de biblioteca, EDGER utiliza un enfoque basado en la estimación de la dispersión para normalizar los datos usando el metodo TMM (Trimmed Mean of M-values). Esto se hace a través de la función `calcNormFactors()`, que calcula factores de normalización basados en la distribución de los conteos y la dispersión estimada. Esto es especialmente robusto cuando comparas muestras de diferentes organismos, ya que puede manejar diferencias en la composición de los transcriptomas y en la expresión génica entre especies.
@@ -689,7 +692,92 @@ ggsave(
   height   = max(4, length(unique(dotplot_edger$nombre_gen)) * 0.30)
 )
 
+```
+## Upset plot de genes TRIM significativamente compartidos entre organos
 
+Se visualizan las intersecciones de genes TRIM diferencialmente expresados entre órganos, permitiendo identificar qué genes presentan una respuesta  conservada entre tejidos y cuáles son exclusivos de un órgano concreto. Las barras superiores indican el número de genes en cada intersección y los puntos conectados los órganos que la forman.
+
+```{r}
+
+if (nrow(sig) > 0) {
+  # Contruir lista de genes por órgano
+  genes_por_organo <- split(sig$gene_id_ref, sig$organo)
+  # Obtener todos los genes unicos significativos.
+  todos_genes <- unique(sig$gene_id_ref)
+  mat_upset <- as.data.frame(sapply(genes_por_organo, function(genes) {
+    as.integer(todos_genes %in% genes)
+  })
+  )
+  rownames(mat_upset) <- todos_genes
+  # Generar UpSet plot
+  pdf(file.path(dir_figuras, paste0("upset_trim_",
+                   especie_ref$prefijo, "_vs_", especie_obj$prefijo, ".pdf")),
+      width = 10, height = 6
+      )
+  upset(
+    mat_upset,
+    nsets = length(genes_por_organo),
+    nintersects = 20,
+    order.by = "freq",
+    decreasing = TRUE,
+    sets.bar.color = c(
+      brain            = "#4E79A7",  # azul
+      distal_intestine = "#F28E2B",  # naranja
+      gill             = "#59A14F",  # verde
+      gonad            = "#E15759",  # rojo
+      kidney           = "#B07AA1",  # morado
+      liver            = "#9C755F",  # marrón
+      muscle           = "#76B7B2"   # turquesa
+    )[names(genes_por_organo)],
+    main.bar.color = "#E15759",
+    matrix.color   = "grey30",
+    point.size     = 3,
+    text.scale     = c(2, 2, 1.5, 1.5, 1.5, 1.5),
+    mainbar.y.label = "Número de genes TRIM significativos",
+    sets.x.label   = "Número de genes TRIM por órgano",
+    mb.ratio = c(0.6, 0.35)
+  )
+  grid::grid.text(
+    paste("Genes TRIM significativos —", especie_ref$nombre, "vs", especie_obj$nombre),
+    x = 0.65, y = 0.97,
+    gp = grid::gpar(fontsize = 12, fontface = "bold", col = "grey20")
+  )
+
+  dev.off()
+
+  upset(
+    mat_upset,
+    nsets = length(genes_por_organo),
+    nintersects = 20,
+    order.by = "freq",
+    decreasing = TRUE,
+    sets.bar.color = c(
+      brain            = "#4E79A7",  # azul
+      distal_intestine = "#F28E2B",  # naranja
+      gill             = "#59A14F",  # verde
+      gonad            = "#E15759",  # rojo
+      kidney           = "#B07AA1",  # morado
+      liver            = "#9C755F",  # marrón
+      muscle           = "#76B7B2"   # turquesa
+    )[names(genes_por_organo)],
+    main.bar.color = "#E15759",
+    matrix.color   = "grey30",
+    point.size     = 3,
+    text.scale     = c(2, 2, 1.5, 1.5, 1.5, 1.5),
+    mainbar.y.label = "Número de genes TRIM significativos",
+    sets.x.label   = "Número de genes TRIM por órgano",
+    mb.ratio = c(0.6, 0.35)
+  )
+
+  grid::grid.text(
+    paste("Genes TRIM significativos —", especie_ref$nombre, "vs", especie_obj$nombre),
+    x = 0.65, y = 0.97,
+    gp = grid::gpar(fontsize = 12, fontface = "bold", col = "grey20")
+  )
+
+} else {
+  message("No hay genes TRIM significativos — UpSet plot no generado.")
+}
 
 ```
 

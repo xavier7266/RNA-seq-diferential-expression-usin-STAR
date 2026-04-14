@@ -180,7 +180,7 @@ grafico_pca <- ggplot(pca_data, aes(PC1, PC2, color = organ, fill = organ)) +
   geom_point(size = 4, alpha = 0.95, shape = 21,
              color = "white", stroke = 0.5) +
   geom_text_repel(
-    aes(label = name),
+    aes(label = substr(name, nchar(name) - 2, nchar(name))),
     size         = 2.5,
     color        = "grey30",
     max.overlaps = 20,
