@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# TABLA: Expresión de genes TRIM por órgano
+# Ejecutar en la consola de R DESPUÉS de correr el RMD completo
+# ─────────────────────────────────────────────────────────────────────────────
+
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+# 1. Conteos normalizados sólo para genes TRIM detectados
+trim_norm <- as.data.frame(conteos_normalizados) %>%
+  rownames_to_column("ensembl_gene_id") %>%
+  filter(ensembl_gene_id %in% trim_genes$ensembl_gene_id)
+
+# 2. Añadir nombre del gen
+trim_norm <- left_join(
+  trim_norm,
+  trim_genes %>% select(ensembl_gene_id, external_gene_name),
+  by = "ensembl_gene_id"
+)
+
+# 3. Pivotear a formato largo (muestra → órgano)
+trim_long <- trim_norm %>%
+  pivot_longer(
+    cols      = -c(ensembl_gene_id, external_gene_name),
+    names_to  = "sample_id",
+    values_to = "norm_count"
+  ) %>%
+  left_join(metadata %>% select(sample_id, organ), by = "sample_id")
+
+# 4. Calcular la media de conteos normalizados por gen y órgano
+trim_por_organo <- trim_long %>%
+  group_by(ensembl_gene_id, external_gene_name, organ) %>%
+  summarise(mean_norm_count = round(mean(norm_count), 2), .groups = "drop")
+
+# 5. Tabla ancha: genes en filas, órganos en columnas (conteos medios)
+tabla_wide_counts <- trim_por_organo %>%
+  pivot_wider(
+    id_cols     = c(ensembl_gene_id, external_gene_name),
+    names_from  = organ,
+    values_from = mean_norm_count
+  ) %>%
+  arrange(external_gene_name)
+
+# 6. Tabla ancha: expresado (1) / no expresado (0) con umbral de 10 conteos
+umbral_expresion <- 10
+
+tabla_wide_binaria <- trim_por_organo %>%
+  mutate(expresado = ifelse(mean_norm_count >= umbral_expresion, 1, 0)) %>%
+  pivot_wider(
+    id_cols     = c(ensembl_gene_id, external_gene_name),
+    names_from  = organ,
+    values_from = expresado
+  ) %>%
+  arrange(external_gene_name)
+
+# 7. Exportar ambas tablas como TSV
+write.table(
+  tabla_wide_counts,
+  file      = file.path(dir_tablas, paste0("TRIM_expresion_por_organo_conteos_", organism_tag, ".tsv")),
+  sep       = "\t",
+  row.names = FALSE,
+  quote     = FALSE
+)
+
+write.table(
+  tabla_wide_binaria,
+  file      = file.path(dir_tablas, paste0("TRIM_expresion_por_organo_binaria_", organism_tag, ".tsv")),
+  sep       = "\t",
+  row.names = FALSE,
+  quote     = FALSE
+)
+
+cat("✓ Tablas guardadas en:", dir_tablas, "\n")
+cat("  - Conteos medios normalizados por órgano\n")
+cat("  - Tabla binaria expresado/no expresado (umbral ≥", umbral_expresion, "conteos)\n")
+cat("\nVista previa (binaria):\n")
+print(tabla_wide_binaria, n = 20)

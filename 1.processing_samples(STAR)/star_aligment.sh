@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J star_align
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=35G
+#SBATCH --mem=25G
 #SBATCH -o star_aligment_%j.out
 #SBATCH -t 24:00:00
 

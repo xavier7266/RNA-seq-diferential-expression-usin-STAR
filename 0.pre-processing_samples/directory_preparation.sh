@@ -2,7 +2,7 @@
 set -euo pipefail
 
 
-BASE_DIR="$(pwd)}"
+BASE_DIR="$(pwd)"
 
 # Órganos a crear
 ORGANS=(
